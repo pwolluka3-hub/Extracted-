@@ -5,6 +5,7 @@ const PUTER_READY_TIMEOUT = 2000;
 const LOCAL_KV_PREFIX = 'nexus:kv:';
 const LOCAL_FILE_PREFIX = 'nexus:file:';
 const LOCAL_AUTH_KEY = 'nexus:auth:user';
+const LOCAL_AUTH_SESSION_KEY = 'nexus:auth:session';
 
 function hasLocalStorage(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
@@ -33,14 +34,26 @@ export function getCachedAuthUser(): { username: string } | null {
   return getCachedUser();
 }
 
+export function hasCachedAuthSession(): boolean {
+  if (!hasLocalStorage()) return false;
+
+  try {
+    return window.localStorage.getItem(LOCAL_AUTH_SESSION_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 function cacheUser(user: { username: string } | null): void {
   if (!hasLocalStorage()) return;
 
   try {
     if (user) {
       window.localStorage.setItem(LOCAL_AUTH_KEY, JSON.stringify(user));
+      window.localStorage.setItem(LOCAL_AUTH_SESSION_KEY, 'true');
     } else {
       window.localStorage.removeItem(LOCAL_AUTH_KEY);
+      window.localStorage.removeItem(LOCAL_AUTH_SESSION_KEY);
     }
   } catch {
     // Ignore local storage failures
@@ -124,14 +137,14 @@ export async function getUser(): Promise<{ username: string } | null> {
 export async function isSignedIn(): Promise<boolean> {
   try {
     const ready = await waitForPuter();
-    if (!ready) return !!getCachedUser();
+    if (!ready) return !!getCachedUser() || hasCachedAuthSession();
     
     const signedIn = await window.puter.auth.isSignedIn();
-    if (!signedIn && getCachedUser()) return true;
+    if (!signedIn && (getCachedUser() || hasCachedAuthSession())) return true;
     return signedIn;
   } catch (error) {
     console.error('Puter isSignedIn error:', error);
-    return !!getCachedUser();
+    return !!getCachedUser() || hasCachedAuthSession();
   }
 }
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from 'react';
-import { signIn, signOut, getUser, isSignedIn, getCachedAuthUser } from '@/lib/services/puterService';
+import { signIn, signOut, getUser, isSignedIn, getCachedAuthUser, hasCachedAuthSession } from '@/lib/services/puterService';
 import { initMemory, isOnboardingComplete, loadBrandKit } from '@/lib/services/memoryService';
 import type { BrandKit } from '@/lib/types';
 
@@ -24,9 +24,10 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const cachedUser = getCachedAuthUser();
+  const cachedSession = hasCachedAuthSession();
   const [state, setState] = useState<AuthState>({
-    isLoading: !cachedUser,
-    isAuthenticated: !!cachedUser,
+    isLoading: !(cachedUser || cachedSession),
+    isAuthenticated: !!(cachedUser || cachedSession),
     user: cachedUser,
     onboardingComplete: false,
     brandKit: null,
@@ -43,7 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         if (!mounted) return;
 
-        if (!authenticated || !user) {
+        if (!authenticated && !hasCachedAuthSession() && !getCachedAuthUser()) {
           setState({
             isLoading: false,
             isAuthenticated: false,
@@ -74,7 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const fallbackUser = getCachedAuthUser();
         setState({
           isLoading: false,
-          isAuthenticated: !!fallbackUser,
+          isAuthenticated: !!(fallbackUser || hasCachedAuthSession()),
           user: fallbackUser,
           onboardingComplete: false,
           brandKit: null,
