@@ -2,7 +2,7 @@
 
 export const dynamic = 'force-dynamic';
 
-import { useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/context/AuthContext';
 import { AgentProvider } from '@/lib/context/AgentContext';
@@ -10,27 +10,34 @@ import { BrandKitProvider } from '@/lib/context/BrandKitContext';
 import { AppShell } from '@/components/layout/AppShell';
 import { FullPageLoading } from '@/components/nexus/LoadingPulse';
 import { CommandPaletteWrapper } from '@/components/CommandPalette';
+import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
+import { NotificationBootstrap } from '@/components/NotificationBootstrap';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const { isLoading, isAuthenticated, onboardingComplete } = useAuth();
+  const { isLoading, isAuthenticated, onboardingComplete, brandKit } = useAuth();
+  const isReady = onboardingComplete || !!brandKit;
 
   useEffect(() => {
-    if (!isLoading) {
-      if (!isAuthenticated) {
-        router.push('/');
-      } else if (!onboardingComplete) {
-        router.push('/onboarding');
-      }
+    if (isLoading) return;
+
+    if (!isAuthenticated) {
+      router.replace('/');
+    } else if (!isReady) {
+      router.replace('/onboarding');
     }
-  }, [isLoading, isAuthenticated, onboardingComplete, router]);
+  }, [isLoading, isAuthenticated, isReady, router]);
 
   if (isLoading) {
     return <FullPageLoading text="Loading..." />;
   }
 
-  if (!isAuthenticated || !onboardingComplete) {
-    return <FullPageLoading text="Redirecting..." />;
+  if (!isAuthenticated) {
+    return <FullPageLoading text="Redirecting to login..." />;
+  }
+
+  if (!isReady) {
+    return <FullPageLoading text="Redirecting to onboarding..." />;
   }
 
   return <>{children}</>;
@@ -47,8 +54,10 @@ export default function DashboardLayout({
         <AgentProvider>
           <AppShell>{children}</AppShell>
           <CommandPaletteWrapper />
+          <NotificationBootstrap />
         </AgentProvider>
       </BrandKitProvider>
+      <ServiceWorkerRegister />
     </AuthGuard>
   );
 }
