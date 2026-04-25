@@ -56,6 +56,160 @@ export const DEFAULT_APP_AGENT_SKILLS: AgentSkillTemplate[] = [
     category: 'quality',
     enabled: true,
   },
+  {
+    name: 'Hook Variants Engine',
+    description: 'Generate multiple scroll-stopping hooks for every concept.',
+    prompt: 'Create 5 hook variants with different angles: curiosity, bold claim, pain point, contrarian, and story-led.',
+    category: 'hooks',
+    enabled: true,
+  },
+  {
+    name: 'Storytelling Framework',
+    description: 'Structure narratives for watch-time and retention.',
+    prompt: 'Structure storytelling content as Hook -> Context -> Conflict -> Shift -> Practical takeaway -> CTA.',
+    category: 'storytelling',
+    enabled: true,
+  },
+  {
+    name: 'Platform Native Rewriter',
+    description: 'Adapt content for each platform tone and constraints.',
+    prompt: 'Rewrite output natively for Instagram, TikTok, X, LinkedIn, and YouTube without sounding copied across channels.',
+    category: 'repurpose',
+    enabled: true,
+  },
+  {
+    name: 'Content Calendar Planner',
+    description: 'Turn ideas into weekly and monthly publishing plans.',
+    prompt: 'Generate a practical content calendar with posting cadence, themes, and priority slots for each platform.',
+    category: 'strategy',
+    enabled: true,
+  },
+  {
+    name: 'Trend to Angle Mapper',
+    description: 'Convert trends into brand-safe content opportunities.',
+    prompt: 'Map trending topics to audience pain points and convert them into unique, brand-aligned content angles.',
+    category: 'strategy',
+    enabled: true,
+  },
+  {
+    name: 'Competitor Differentiator',
+    description: 'Avoid generic clone content and sharpen positioning.',
+    prompt: 'When comparing competitors, extract gaps and position the output with clear differentiation instead of imitation.',
+    category: 'strategy',
+    enabled: true,
+  },
+  {
+    name: 'Hashtag Cluster Builder',
+    description: 'Create intentional hashtag mixes by intent.',
+    prompt: 'Generate a balanced hashtag cluster: high-volume, mid-volume, niche, and branded tags tied to post intent.',
+    category: 'growth',
+    enabled: true,
+  },
+  {
+    name: 'Community Reply Manager',
+    description: 'Draft high-quality replies to comments and audience questions.',
+    prompt: 'Draft concise, human replies that acknowledge sentiment, add value, and move the conversation forward.',
+    category: 'community',
+    enabled: true,
+  },
+  {
+    name: 'DM Outreach Writer',
+    description: 'Compose ethical outreach and collaboration messages.',
+    prompt: 'Write brief personalized outreach DMs for creators, partners, and leads with clear value and no spam tone.',
+    category: 'community',
+    enabled: true,
+  },
+  {
+    name: 'LinkedIn Ghostwriter',
+    description: 'Produce professional, insight-led LinkedIn posts.',
+    prompt: 'Write LinkedIn posts with strong opening, practical insight, and a professional but human voice.',
+    category: 'platform',
+    enabled: true,
+  },
+  {
+    name: 'YouTube Script Optimizer',
+    description: 'Build scripts for retention and completion rate.',
+    prompt: 'Write YouTube scripts with chaptered flow, retention loops, and clear scene-to-scene progression.',
+    category: 'platform',
+    enabled: true,
+  },
+  {
+    name: 'Reel Shotlist Builder',
+    description: 'Convert ideas into short-form visual production plans.',
+    prompt: 'Turn short-form video ideas into a shot list with scene beats, on-screen text, voiceover lines, and B-roll cues.',
+    category: 'media',
+    enabled: true,
+  },
+  {
+    name: 'Carousel Outline Builder',
+    description: 'Build swipe-optimized carousel structures.',
+    prompt: 'Create carousel slide structures with hook slide, value progression, proof slides, and conversion slide.',
+    category: 'media',
+    enabled: true,
+  },
+  {
+    name: 'UGC Ad Script Builder',
+    description: 'Draft creator-style ad scripts that feel natural.',
+    prompt: 'Generate UGC-style ad scripts with problem setup, authentic demo, social proof, and compliant CTA.',
+    category: 'conversion',
+    enabled: true,
+  },
+  {
+    name: 'CTA Optimizer',
+    description: 'Strengthen conversion actions without sounding pushy.',
+    prompt: 'Generate CTA options: direct, soft, urgency, and value-first, and choose based on platform and audience intent.',
+    category: 'conversion',
+    enabled: true,
+  },
+  {
+    name: 'A/B Variant Generator',
+    description: 'Create test-ready variants for experimentation.',
+    prompt: 'For every important post, generate at least 2 high-contrast variants to test hooks, CTA, and format.',
+    category: 'analytics',
+    enabled: true,
+  },
+  {
+    name: 'Analytics Feedback Loop',
+    description: 'Use performance data to improve future outputs.',
+    prompt: 'When performance context is available, incorporate top-performing patterns and avoid repeated low-performing formats.',
+    category: 'analytics',
+    enabled: true,
+  },
+  {
+    name: 'SEO Metadata Crafter',
+    description: 'Generate discoverability metadata for search surfaces.',
+    prompt: 'Generate SEO-friendly titles, descriptions, and keyword phrasing for YouTube, blogs, and social search indexing.',
+    category: 'seo',
+    enabled: true,
+  },
+  {
+    name: 'Long-to-Short Repurposer',
+    description: 'Convert long assets into short clips and posts.',
+    prompt: 'Repurpose long-form content into clips, quote posts, threads, and carousel summaries without losing core message.',
+    category: 'repurpose',
+    enabled: true,
+  },
+  {
+    name: 'Brand Voice Lock',
+    description: 'Keep outputs consistent with established tone.',
+    prompt: 'Maintain consistent brand voice, vocabulary, and tone across all platforms and content formats.',
+    category: 'quality',
+    enabled: true,
+  },
+  {
+    name: 'Crisis Response Drafting',
+    description: 'Handle sensitive community moments carefully.',
+    prompt: 'Draft calm, accountable, non-defensive response statements for sensitive incidents and public feedback.',
+    category: 'community',
+    enabled: true,
+  },
+  {
+    name: 'Offer Positioning Engine',
+    description: 'Turn product/service offers into clear messaging.',
+    prompt: 'Translate product features into concrete audience outcomes and position offers with clear problem-solution framing.',
+    category: 'strategy',
+    enabled: true,
+  },
 ];
 
 function toStoredSkill(template: AgentSkillTemplate, index: number): AgentSkill {
@@ -99,6 +253,6 @@ export async function getEnabledAgentSkills(): Promise<AgentSkill[]> {
 export function buildAgentSkillContext(skills: AgentSkill[]): string {
   if (!skills.length) return '';
 
-  const lines = skills.slice(0, 12).map((skill) => `- ${skill.name}: ${skill.prompt}`);
+  const lines = skills.slice(0, 24).map((skill) => `- ${skill.name}: ${skill.prompt}`);
   return `\n\nActive App Skills:\n${lines.join('\n')}`;
 }

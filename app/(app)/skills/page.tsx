@@ -20,6 +20,15 @@ import {
   Heart,
   TrendingUp,
   Target,
+  Clapperboard,
+  Timer,
+  MessageCircle,
+  ShieldCheck,
+  Megaphone,
+  BarChart3,
+  Search,
+  FolderGit2,
+  Briefcase,
 } from 'lucide-react';
 
 interface Skill {
@@ -39,6 +48,17 @@ const SKILL_CATEGORIES = [
   { id: 'conversion', name: 'Conversion', icon: Target },
   { id: 'engagement', name: 'Engagement', icon: Heart },
   { id: 'growth', name: 'Growth', icon: TrendingUp },
+  { id: 'media', name: 'Media', icon: Clapperboard },
+  { id: 'latency', name: 'Latency', icon: Timer },
+  { id: 'conversation', name: 'Conversation', icon: MessageCircle },
+  { id: 'quality', name: 'Quality', icon: ShieldCheck },
+  { id: 'strategy', name: 'Strategy', icon: Megaphone },
+  { id: 'analytics', name: 'Analytics', icon: BarChart3 },
+  { id: 'seo', name: 'SEO', icon: Search },
+  { id: 'repurpose', name: 'Repurpose', icon: FolderGit2 },
+  { id: 'platform', name: 'Platform', icon: Briefcase },
+  { id: 'community', name: 'Community', icon: MessageSquare },
+  { id: 'execution', name: 'Execution', icon: Zap },
   { id: 'custom', name: 'Custom', icon: Sparkles },
 ];
 
