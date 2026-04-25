@@ -239,28 +239,44 @@ export async function generateAgentImage(
   } = {}
 ): Promise<MediaGenerationResult> {
   let plan = await buildMediaPrompt(request, 'image', options.preferredModel);
-  const providerAttempts: Array<ImageProvider | undefined> = options.provider
-    ? [options.provider, undefined]
-    : [undefined];
+  const generationStrategies: Array<{
+    provider?: ImageProvider;
+    qualityTier: 'netflix' | 'premium';
+    minQualityScore: number;
+  }> = options.provider
+    ? [
+        { provider: options.provider, qualityTier: 'netflix', minQualityScore: 78 },
+        { provider: undefined, qualityTier: 'netflix', minQualityScore: 78 },
+        { provider: undefined, qualityTier: 'premium', minQualityScore: 72 },
+      ]
+    : [
+        { provider: undefined, qualityTier: 'netflix', minQualityScore: 78 },
+        { provider: undefined, qualityTier: 'premium', minQualityScore: 72 },
+      ];
 
   let result: Awaited<ReturnType<typeof generateImageAsset>> | null = null;
   let lastError: Error | null = null;
+  let usedMinQualityScore = 78;
 
   for (let generationAttempt = 0; generationAttempt < 2 && !result; generationAttempt++) {
-    for (const provider of providerAttempts) {
+    for (const strategy of generationStrategies) {
       try {
         result = await generateImageAsset({
           prompt: plan.prompt,
           negativePrompt: plan.negativePrompt,
-          provider,
-          qualityTier: 'netflix',
+          provider: strategy.provider,
+          qualityTier: strategy.qualityTier,
           width: plan.aspectRatio === '9:16' ? 1024 : 1024,
           height: plan.aspectRatio === '9:16' ? 1792 : 1024,
         });
+        usedMinQualityScore = strategy.minQualityScore;
         break;
       } catch (error) {
         lastError = error as Error;
-        console.warn(`Agent image generation failed on ${provider || 'auto'}, retrying with fallback`, lastError);
+        console.warn(
+          `Agent image generation failed on ${strategy.provider || 'auto'} (${strategy.qualityTier}), retrying with fallback`,
+          lastError
+        );
       }
     }
 
@@ -274,7 +290,7 @@ export async function generateAgentImage(
       result = null;
     } else {
       const quality = await validateImageQuality(result.url);
-      if (!quality.passed || (quality.score || 0) < 78) {
+      if (!quality.passed || (quality.score || 0) < usedMinQualityScore) {
         lastError = new Error(quality.reason || 'Generated image failed quality validation');
         result = null;
       }

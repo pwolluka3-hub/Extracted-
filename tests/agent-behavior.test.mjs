@@ -22,6 +22,14 @@ test('detectExplicitMediaIntent routes explicit video generation', () => {
   assert.equal(detectExplicitMediaIntent('Generate a cinematic video of city streets at night'), 'make_video');
 });
 
+test('detectExplicitMediaIntent routes direct request phrasing for image generation', () => {
+  assert.equal(detectExplicitMediaIntent('I want an image of a luxury watch on black velvet'), 'create_image');
+});
+
+test('detectExplicitMediaIntent keeps media quality discussion as answer mode', () => {
+  assert.equal(detectExplicitMediaIntent('video quality tips for better lighting'), 'answer_question');
+});
+
 test('detectExplicitMediaIntent routes explicit image generation', () => {
   assert.equal(detectExplicitMediaIntent('Create an image of a luxury product hero shot'), 'create_image');
 });
