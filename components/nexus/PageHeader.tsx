@@ -22,10 +22,21 @@ export function PageHeader({
 }: PageHeaderProps) {
   const resolvedDescription = description || subtitle;
   const resolvedAction = action || actions;
-  const Icon = typeof icon === 'function' ? icon : null;
+  const isForwardRefComponent =
+    typeof icon === 'object' &&
+    icon !== null &&
+    'render' in icon &&
+    typeof (icon as { render?: unknown }).render === 'function';
+
+  const Icon = typeof icon === 'function' || isForwardRefComponent
+    ? (icon as React.ElementType)
+    : null;
+
   const renderedIcon: React.ReactNode = Icon
-    ? React.createElement(Icon as React.ElementType, { className: 'size-8' })
-    : (icon as React.ReactNode);
+    ? React.createElement(Icon, { className: 'size-8' })
+    : React.isValidElement(icon)
+    ? icon
+    : null;
 
   return (
     <div className={cn('mb-8', className)}>
