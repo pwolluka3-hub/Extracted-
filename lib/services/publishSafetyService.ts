@@ -7,7 +7,7 @@ import { kvGet, kvSet, readFile, writeFile, PATHS } from './puterService';
 import { loadBrandKit } from './memoryService';
 import { universalChat } from './aiService';
 import { loadAgentMemory } from './agentMemoryService';
-import type { BrandKit } from '@/lib/types';
+import type { BrandKit, Platform } from '@/lib/types';
 import { publishPost, schedulePost } from './publishService';
 import { validateContent } from './governorService';
 
@@ -40,7 +40,7 @@ export interface ApprovalRequest {
   id: string;
   contentId: string;
   content: string;
-  platforms: string[];
+  platforms: Platform[];
   mediaUrl?: string;
   scheduledTime?: string;
   safetyCheck: SafetyCheckResult;
@@ -471,7 +471,7 @@ export async function incrementPostCount(): Promise<void> {
 export async function createApprovalRequest(
   contentId: string,
   content: string,
-  platforms: string[],
+  platforms: Platform[],
   scheduledTime?: string,
   mediaUrl?: string,
   contentIdea?: string
@@ -529,7 +529,7 @@ export async function approveContent(
   
   if (index === -1) return null;
 
-  const request = {
+  const request: ApprovalRequest = {
     ...pending[index],
     status: 'approved',
     reviewedAt: new Date().toISOString(),
@@ -552,7 +552,7 @@ export async function approveContent(
       if (request.scheduledTime) {
         const result = await schedulePost({
           text: request.content,
-          platforms: request.platforms as any,
+          platforms: request.platforms,
           scheduledDate: request.scheduledTime,
           mediaUrl: request.mediaUrl,
         });
@@ -563,7 +563,7 @@ export async function approveContent(
       } else {
         const result = await publishPost({
           text: request.content,
-          platforms: request.platforms as any,
+          platforms: request.platforms,
           mediaUrl: request.mediaUrl,
         });
         publishResult = {
@@ -607,13 +607,14 @@ export async function rejectContent(
   
   if (index === -1) return null;
 
-  pending[index] = {
+  const rejectedRequest: ApprovalRequest = {
     ...pending[index],
     status: 'rejected',
     reviewedAt: new Date().toISOString(),
     reviewedBy,
     notes,
   };
+  pending[index] = rejectedRequest;
 
   await writeFile(`${PATHS.settings}/pending-approvals.json`, pending);
   

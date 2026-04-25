@@ -49,7 +49,11 @@ export function BrandKitProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    loadKit();
+    const timeoutId = window.setTimeout(() => {
+      void loadKit();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
   }, [loadKit]);
 
   const updateBrandKit = useCallback(async (updates: Partial<BrandKit>) => {

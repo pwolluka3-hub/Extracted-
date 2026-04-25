@@ -2,7 +2,7 @@
 import type { Platform, ContentDraft } from '@/lib/types';
 import { kvGet } from './puterService';
 
-const AYRSHARE_API_BASE = 'https://app.ayrshare.com/api';
+const AYRSHARE_API_BASE = 'https://api.ayrshare.com/api';
 
 // Get Ayrshare API key from storage
 async function getAyrshareKey(): Promise<string | null> {
@@ -53,6 +53,108 @@ const PLATFORM_MAP: Record<Platform, string> = {
   youtube: 'youtube',
   pinterest: 'pinterest',
 };
+
+interface AyrshareUserDisplayName {
+  platform?: string;
+  username?: string;
+  displayName?: string;
+  pageName?: string;
+}
+
+interface AyrshareUserResponse {
+  activeSocialAccounts?: string[];
+  displayNames?: AyrshareUserDisplayName[];
+  user?: Record<string, { username?: string }>;
+  profiles?: Array<{
+    activeSocialAccounts?: string[];
+    displayNames?: AyrshareUserDisplayName[];
+    user?: Record<string, { username?: string }>;
+  }>;
+}
+
+function normalizeAyrsharePlatform(platform: string | undefined): string | null {
+  if (!platform) return null;
+
+  const normalized = platform.toLowerCase().trim();
+  if (normalized === 'x') return 'twitter';
+  if (normalized === 'googlebusinessprofile') return 'gmb';
+  if (normalized === 'google-business-profile') return 'gmb';
+  return normalized;
+}
+
+function createEmptyPlatformDetails(): Record<Platform, { connected: boolean; username?: string }> {
+  return {
+    twitter: { connected: false },
+    instagram: { connected: false },
+    tiktok: { connected: false },
+    linkedin: { connected: false },
+    facebook: { connected: false },
+    threads: { connected: false },
+    youtube: { connected: false },
+    pinterest: { connected: false },
+  };
+}
+
+function markConnectedPlatform(
+  details: Record<Platform, { connected: boolean; username?: string }>,
+  connectedPlatforms: Set<Platform>,
+  platformId: string | undefined,
+  username?: string
+): void {
+  const normalized = normalizeAyrsharePlatform(platformId);
+  if (!normalized) return;
+
+  const match = Object.entries(PLATFORM_MAP).find(([, ayrshareId]) => ayrshareId === normalized);
+  if (!match) return;
+
+  const platform = match[0] as Platform;
+  connectedPlatforms.add(platform);
+  details[platform] = {
+    connected: true,
+    username: username || details[platform].username,
+  };
+}
+
+function extractConnectedPlatforms(result: AyrshareUserResponse): {
+  platforms: Platform[];
+  details: Record<Platform, { connected: boolean; username?: string }>;
+} {
+  const details = createEmptyPlatformDetails();
+  const connectedPlatforms = new Set<Platform>();
+
+  for (const active of result.activeSocialAccounts || []) {
+    markConnectedPlatform(details, connectedPlatforms, active, result.user?.[active]?.username);
+  }
+
+  for (const entry of result.displayNames || []) {
+    markConnectedPlatform(
+      details,
+      connectedPlatforms,
+      entry.platform,
+      entry.username || entry.displayName || entry.pageName
+    );
+  }
+
+  for (const profile of result.profiles || []) {
+    for (const active of profile.activeSocialAccounts || []) {
+      markConnectedPlatform(details, connectedPlatforms, active, profile.user?.[active]?.username);
+    }
+
+    for (const entry of profile.displayNames || []) {
+      markConnectedPlatform(
+        details,
+        connectedPlatforms,
+        entry.platform,
+        entry.username || entry.displayName || entry.pageName
+      );
+    }
+  }
+
+  return {
+    platforms: Array.from(connectedPlatforms),
+    details,
+  };
+}
 
 // Publish a post immediately
 export async function publishPost(params: {
@@ -157,51 +259,20 @@ export async function getConnectedPlatforms(): Promise<{
   details: Record<Platform, { connected: boolean; username?: string }>;
 }> {
   try {
-    const result = await ayrshareRequest<{
-      activePlatforms?: string[];
-      user?: Record<string, { username?: string }>;
-    }>('/user');
+    const result = await ayrshareRequest<AyrshareUserResponse>('/user');
+    const extracted = extractConnectedPlatforms(result);
 
-    const activePlatforms = result.activePlatforms || [];
-    const platformDetails: Record<Platform, { connected: boolean; username?: string }> = {
-      twitter: { connected: false },
-      instagram: { connected: false },
-      tiktok: { connected: false },
-      linkedin: { connected: false },
-      facebook: { connected: false },
-      threads: { connected: false },
-      youtube: { connected: false },
-      pinterest: { connected: false },
-    };
-
-    const connectedPlatforms: Platform[] = [];
-
-    for (const [platform, ayrshareId] of Object.entries(PLATFORM_MAP)) {
-      if (activePlatforms.includes(ayrshareId)) {
-        const p = platform as Platform;
-        connectedPlatforms.push(p);
-        platformDetails[p] = {
-          connected: true,
-          username: result.user?.[ayrshareId]?.username,
-        };
-      }
+    if (extracted.platforms.length > 0) {
+      return extracted;
     }
 
-    return { platforms: connectedPlatforms, details: platformDetails };
+    const profilesResult = await ayrshareRequest<AyrshareUserResponse>('/profiles');
+    return extractConnectedPlatforms(profilesResult);
   } catch {
     // Return empty if not configured
     return {
       platforms: [],
-      details: {
-        twitter: { connected: false },
-        instagram: { connected: false },
-        tiktok: { connected: false },
-        linkedin: { connected: false },
-        facebook: { connected: false },
-        threads: { connected: false },
-        youtube: { connected: false },
-        pinterest: { connected: false },
-      },
+      details: createEmptyPlatformDetails(),
     };
   }
 }

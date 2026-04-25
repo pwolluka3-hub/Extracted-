@@ -87,7 +87,6 @@ async function extractPDFText(base64Data: string): Promise<string> {
 
     const pdf = await pdfjsLib.getDocument({
       data: uint8Array,
-      disableWorker: true,
       useWorkerFetch: false,
       isEvalSupported: false,
     }).promise;

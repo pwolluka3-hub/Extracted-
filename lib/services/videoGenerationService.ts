@@ -31,11 +31,25 @@ const RETRY_DELAY = 1500;
 const DEFAULT_LTX_MODEL = 'fal-ai/ltx-video-v2.3';
 const DEFAULT_LTX_OPEN_ENDPOINT = 'http://127.0.0.1:8000/generate';
 
+interface VideoPayloadShape {
+  video?: unknown;
+  video_url?: unknown;
+  url?: unknown;
+  src?: unknown;
+  output?: VideoPayloadShape;
+  result?: VideoPayloadShape;
+  data?: VideoPayloadShape;
+  videos?: unknown[];
+  duration?: unknown;
+  aspect_ratio?: unknown;
+  thumbnail_url?: unknown;
+}
+
 function buildEnhancedVideoPrompt(options: VideoGenerationOptions): string {
   const {
     prompt,
     aspectRatio = '16:9',
-    durationSeconds = 5,
+    durationSeconds = 8,
     cameraAngle,
     cameraMotion,
     shotStyle,
@@ -138,7 +152,7 @@ function normalizeFalEndpoint(endpoint: string): string {
   return `https://queue.fal.run/${endpoint.replace(/^\/+/, '')}`;
 }
 
-function extractVideoPayload(data: any): GeneratedVideo | null {
+function extractVideoPayload(data: VideoPayloadShape | null | undefined): GeneratedVideo | null {
   const candidates = [
     data?.video,
     data?.video_url,
@@ -156,8 +170,37 @@ function extractVideoPayload(data: any): GeneratedVideo | null {
   const first = candidates[0];
   if (!first) return null;
 
-  const url = typeof first === 'string' ? first : first.url || first.video_url || first.src;
+  let url: string | null = null;
+  let firstDuration: number | undefined;
+  let firstThumbnail: string | undefined;
+
+  if (typeof first === 'string') {
+    url = first;
+  } else if (typeof first === 'object' && first !== null) {
+    const firstNode = first as VideoPayloadShape;
+    const nestedUrl = [firstNode.url, firstNode.video_url, firstNode.src].find(
+      candidate => typeof candidate === 'string'
+    );
+    url = typeof nestedUrl === 'string' ? nestedUrl : null;
+    firstDuration = typeof firstNode.duration === 'number' ? firstNode.duration : undefined;
+    firstThumbnail =
+      typeof firstNode.thumbnail_url === 'string' ? firstNode.thumbnail_url : undefined;
+  }
+
   if (!url) return null;
+
+  const rawAspectRatio =
+    data?.aspect_ratio ||
+    data?.output?.aspect_ratio ||
+    data?.result?.aspect_ratio;
+  const aspectRatio = typeof rawAspectRatio === 'string' ? rawAspectRatio : '16:9';
+
+  const rawThumbnail =
+    data?.thumbnail_url ||
+    data?.output?.thumbnail_url ||
+    data?.result?.thumbnail_url ||
+    firstThumbnail;
+  const thumbnailUrl = typeof rawThumbnail === 'string' ? rawThumbnail : undefined;
 
   return {
     url,
@@ -166,19 +209,11 @@ function extractVideoPayload(data: any): GeneratedVideo | null {
       data?.duration ||
       data?.output?.duration ||
       data?.result?.duration ||
-      first.duration ||
+      firstDuration ||
       5
     ),
-    aspectRatio:
-      data?.aspect_ratio ||
-      data?.output?.aspect_ratio ||
-      data?.result?.aspect_ratio ||
-      '16:9',
-    thumbnailUrl:
-      data?.thumbnail_url ||
-      data?.output?.thumbnail_url ||
-      data?.result?.thumbnail_url ||
-      first.thumbnail_url,
+    aspectRatio,
+    thumbnailUrl,
   };
 }
 
@@ -224,7 +259,7 @@ async function generateWithLtx23(options: VideoGenerationOptions): Promise<Gener
   const endpoint = normalizeFalEndpoint(configuredEndpoint || DEFAULT_LTX_MODEL);
   const {
     aspectRatio = '16:9',
-    durationSeconds = 5,
+    durationSeconds = 8,
     seed,
     imageUrl,
     cameraAngle,
@@ -286,7 +321,7 @@ async function generateWithOpenLtx23(options: VideoGenerationOptions): Promise<G
 
   const {
     aspectRatio = '16:9',
-    durationSeconds = 5,
+    durationSeconds = 8,
     seed,
     imageUrl,
     cameraAngle,
@@ -345,7 +380,7 @@ export async function generateVideo(options: VideoGenerationOptions): Promise<Ge
     ...options,
     prompt: prompt.substring(0, 1500),
     provider: options.provider || 'ltx23',
-    durationSeconds: Math.min(Math.max(options.durationSeconds || 5, 3), 120),
+    durationSeconds: Math.min(Math.max(options.durationSeconds || 8, 4), 120),
   };
 
   const attempts: VideoProvider[] = cleanOptions.provider === 'ltx23-open'

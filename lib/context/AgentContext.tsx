@@ -232,7 +232,11 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   }, [restoreSessionSnapshot]);
 
   useEffect(() => {
-    loadHistory();
+    const timeoutId = window.setTimeout(() => {
+      void loadHistory();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
   }, [loadHistory]);
 
   useEffect(() => {

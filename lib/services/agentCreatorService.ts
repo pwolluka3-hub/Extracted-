@@ -126,9 +126,9 @@ function getModuleExtension(language: AgentCodeModule['language']): string {
   }
 }
 
-function getModulePath(agentId: string, module: Pick<AgentCodeModule, 'name' | 'language'>): string {
-  const extension = getModuleExtension(module.language);
-  return `${PATHS.system}/agents/${agentId}/modules/${slugifyName(module.name)}.${extension}`;
+function getModulePath(agentId: string, codeModule: Pick<AgentCodeModule, 'name' | 'language'>): string {
+  const extension = getModuleExtension(codeModule.language);
+  return `${PATHS.system}/agents/${agentId}/modules/${slugifyName(codeModule.name)}.${extension}`;
 }
 
 async function validatePromptLikeContent(content: string, label: string): Promise<{ passed: boolean; errors: string[] }> {
@@ -143,9 +143,9 @@ async function validatePromptLikeContent(content: string, label: string): Promis
   };
 }
 
-function validateCodeModule(module: Pick<AgentCodeModule, 'name' | 'code' | 'language'>): { passed: boolean; errors: string[] } {
+function validateCodeModule(codeModule: Pick<AgentCodeModule, 'name' | 'code' | 'language'>): { passed: boolean; errors: string[] } {
   const errors: string[] = [];
-  const code = module.code?.trim() || '';
+  const code = codeModule.code?.trim() || '';
 
   if (!code) {
     errors.push('Module code is empty.');
@@ -155,7 +155,7 @@ function validateCodeModule(module: Pick<AgentCodeModule, 'name' | 'code' | 'lan
     errors.push('Module code is too short to be a valid implementation.');
   }
 
-  if (module.language !== 'json' && !/\bexport\b/.test(code)) {
+  if (codeModule.language !== 'json' && !/\bexport\b/.test(code)) {
     errors.push('Module must export at least one symbol.');
   }
 
@@ -192,15 +192,15 @@ function validateCodeModule(module: Pick<AgentCodeModule, 'name' | 'code' | 'lan
   };
 }
 
-async function persistModuleFile(agentId: string, module: AgentCodeModule): Promise<AgentCodeModule> {
-  const filePath = getModulePath(agentId, module);
-  const saved = await writeFile(filePath, module.code);
+async function persistModuleFile(agentId: string, codeModule: AgentCodeModule): Promise<AgentCodeModule> {
+  const filePath = getModulePath(agentId, codeModule);
+  const saved = await writeFile(filePath, codeModule.code);
   if (!saved) {
     throw new Error(`Failed to persist module file at ${filePath}`);
   }
 
   return {
-    ...module,
+    ...codeModule,
     filePath,
   };
 }
@@ -208,8 +208,8 @@ async function persistModuleFile(agentId: string, module: AgentCodeModule): Prom
 async function persistAgentModules(agent: CreatedAgent): Promise<CreatedAgent> {
   const nextModules: AgentCodeModule[] = [];
 
-  for (const module of agent.codeModules) {
-    const persisted = await persistModuleFile(agent.id, module);
+  for (const codeModule of agent.codeModules) {
+    const persisted = await persistModuleFile(agent.id, codeModule);
     nextModules.push(persisted);
   }
 
@@ -284,12 +284,12 @@ export async function createAgentFromBlueprint(blueprint: AgentBlueprint): Promi
     }
   }
 
-  for (const module of agent.codeModules) {
-    const validation = validateCodeModule(module);
+  for (const codeModule of agent.codeModules) {
+    const validation = validateCodeModule(codeModule);
     if (!validation.passed) {
-      throw new Error(`Invalid module "${module.name}": ${validation.errors.join(' ')}`);
+      throw new Error(`Invalid module "${codeModule.name}": ${validation.errors.join(' ')}`);
     }
-    module.validation = {
+    codeModule.validation = {
       passed: true,
       errors: [],
       validatedAt: now,
@@ -731,7 +731,7 @@ The code must:
     
     const parsed = JSON.parse(jsonMatch[0]);
     
-    const module: AgentCodeModule = {
+    const codeModule: AgentCodeModule = {
       id: generateId(),
       name: parsed.name || 'custom_module',
       description: parsed.description || request.purpose,
@@ -743,13 +743,13 @@ The code must:
       modifiedBy: 'agent',
     };
 
-    const validation = validateCodeModule(module);
+    const validation = validateCodeModule(codeModule);
     if (!validation.passed) {
       throw new Error(`Generated module failed validation: ${validation.errors.join(' ')}`);
     }
 
     const persistedModule = await persistModuleFile(agent.id, {
-      ...module,
+      ...codeModule,
       validation: {
         passed: true,
         errors: [],
@@ -798,8 +798,8 @@ export async function agentEditCode(
   const agent = await getCreatedAgent(agentId);
   if (!agent) return null;
   
-  const module = agent.codeModules.find(m => m.id === moduleId);
-  if (!module) return null;
+  const codeModule = agent.codeModules.find(m => m.id === moduleId);
+  if (!codeModule) return null;
   
   if (agent.blueprint.selfModificationLevel !== 'full') {
     return null;
@@ -808,8 +808,8 @@ export async function agentEditCode(
   const prompt = `You are ${agent.name}, editing your own code module.
 
 Current Code:
-\`\`\`${module.language}
-${module.code}
+\`\`\`${codeModule.language}
+${codeModule.code}
 \`\`\`
 
 Issue: ${editRequest.issue}
@@ -830,28 +830,28 @@ Provide the improved code. Return JSON:
     const parsed = JSON.parse(jsonMatch[0]);
     
     const validation = validateCodeModule({
-      name: module.name,
+      name: codeModule.name,
       code: parsed.code,
-      language: module.language,
+      language: codeModule.language,
     });
     if (!validation.passed) {
       throw new Error(`Edited module failed validation: ${validation.errors.join(' ')}`);
     }
 
-    const oldCode = module.code;
+    const oldCode = codeModule.code;
     
     // Update the module
-    module.code = parsed.code;
-    module.version++;
-    module.lastModified = new Date().toISOString();
-    module.modifiedBy = 'agent';
-    module.validation = {
+    codeModule.code = parsed.code;
+    codeModule.version++;
+    codeModule.lastModified = new Date().toISOString();
+    codeModule.modifiedBy = 'agent';
+    codeModule.validation = {
       passed: true,
       errors: [],
       validatedAt: new Date().toISOString(),
     };
-    const persisted = await persistModuleFile(agent.id, module);
-    Object.assign(module, persisted);
+    const persisted = await persistModuleFile(agent.id, codeModule);
+    Object.assign(codeModule, persisted);
     
     // Log the modification
     agent.selfModificationLog.push({
@@ -872,7 +872,7 @@ Provide the improved code. Return JSON:
     
     await saveCreatedAgent(agent);
     
-    return module;
+    return codeModule;
   } catch (error) {
     console.error('Agent code editing error:', error);
     return null;

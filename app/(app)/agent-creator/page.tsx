@@ -94,10 +94,6 @@ export default function AgentCreatorPage() {
     godModeEnabled: false,
   });
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
   const loadData = async () => {
     setLoading(true);
     setError(null);
@@ -115,6 +111,14 @@ export default function AgentCreatorPage() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      void loadData();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, []);
 
   const handleCreateWithGodMode = async () => {
     if (!godModeForm.description || !godModeForm.useCase) return;
@@ -239,14 +243,14 @@ export default function AgentCreatorPage() {
     const purpose = prompt('What should this code module do?');
     if (!purpose) return;
     
-    const module = await agentWriteCode(selectedAgent.id, {
+    const codeModule = await agentWriteCode(selectedAgent.id, {
       purpose,
       inputType: 'string',
       outputType: 'string',
       constraints: [],
     });
     
-    if (module) {
+    if (codeModule) {
       await loadData();
       const updated = await loadCreatedAgents();
       setSelectedAgent(updated.find(a => a.id === selectedAgent.id) || null);
@@ -551,10 +555,10 @@ export default function AgentCreatorPage() {
                       )}
                     </GlassCard>
                   ) : (
-                    selectedAgent.codeModules.map(module => (
+                    selectedAgent.codeModules.map(codeModule => (
                       <CodeModuleCard
-                        key={module.id}
-                        module={module}
+                        key={codeModule.id}
+                        codeModule={codeModule}
                         agentId={selectedAgent.id}
                         canEdit={selectedAgent.blueprint.selfModificationLevel === 'full'}
                         onRefresh={loadData}
@@ -864,12 +868,12 @@ export default function AgentCreatorPage() {
 
 // Code Module Card Component
 function CodeModuleCard({
-  module,
+  codeModule,
   agentId,
   canEdit,
   onRefresh,
 }: {
-  module: AgentCodeModule;
+  codeModule: AgentCodeModule;
   agentId: string;
   canEdit: boolean;
   onRefresh: () => void;
@@ -883,7 +887,7 @@ function CodeModuleCard({
     const improvement = prompt('What improvement should be made?');
     if (!improvement) return;
     
-    await agentEditCode(agentId, module.id, { issue, improvement });
+    await agentEditCode(agentId, codeModule.id, { issue, improvement });
     onRefresh();
   };
 
@@ -893,18 +897,18 @@ function CodeModuleCard({
         <div>
           <div className="flex items-center gap-2">
             <Code2 className="w-4 h-4 text-[var(--nexus-cyan)]" />
-            <h4 className="font-medium">{module.name}</h4>
-            <span className="text-xs text-muted-foreground">v{module.version}</span>
+            <h4 className="font-medium">{codeModule.name}</h4>
+            <span className="text-xs text-muted-foreground">v{codeModule.version}</span>
           </div>
-          <p className="text-sm text-muted-foreground mt-1">{module.description}</p>
+          <p className="text-sm text-muted-foreground mt-1">{codeModule.description}</p>
           <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
-            <span>{module.language}</span>
-            <span>Modified by {module.modifiedBy}</span>
-            <span>{new Date(module.lastModified).toLocaleDateString()}</span>
+            <span>{codeModule.language}</span>
+            <span>Modified by {codeModule.modifiedBy}</span>
+            <span>{new Date(codeModule.lastModified).toLocaleDateString()}</span>
           </div>
-          {module.filePath && (
+          {codeModule.filePath && (
             <p className="mt-2 text-xs text-muted-foreground break-all">
-              Stored at {module.filePath}
+              Stored at {codeModule.filePath}
             </p>
           )}
         </div>
@@ -921,7 +925,7 @@ function CodeModuleCard({
       </div>
       {showCode && (
         <pre className="mt-4 p-4 bg-black/30 rounded-lg text-sm overflow-auto max-h-64">
-          {module.code}
+          {codeModule.code}
         </pre>
       )}
     </GlassCard>

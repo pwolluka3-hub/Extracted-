@@ -589,7 +589,7 @@ Rules:
               key: String(item?.key || '').trim(),
               value: String(item?.value || '').trim(),
             }))
-            .filter(item => item.key && item.value)
+            .filter((item: { key: string; value: string }) => item.key && item.value)
         : [],
     };
   } catch {

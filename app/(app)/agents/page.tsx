@@ -38,10 +38,6 @@ export default function AgentsPage() {
   const [systemStatus, setSystemStatus] = useState<Awaited<ReturnType<typeof getOrchestrationStatus>> | null>(null);
   const [runningEvolution, setRunningEvolution] = useState(false);
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
   const loadData = async () => {
     setLoading(true);
     try {
@@ -64,6 +60,14 @@ export default function AgentsPage() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      void loadData();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, []);
 
   const handleRunEvolution = async () => {
     setRunningEvolution(true);

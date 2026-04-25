@@ -72,8 +72,12 @@ function inferVideoIntentProfile(request: string): VideoIntentProfile {
   return {
     format: 'short',
     aspectRatio: '16:9',
-    durationSeconds: 15,
+    durationSeconds: 18,
   };
+}
+
+function wantsMaxFidelity(request: string): boolean {
+  return /\b(netflix|seedance|seedance 2|ultra|highest quality|high quality|premium cinematic)\b/i.test(request);
 }
 
 function mapVideoContentType(profile: VideoIntentProfile): ScenePlan['contentType'] {
@@ -110,13 +114,16 @@ async function buildMediaPrompt(
   const visualAgent = agents.find(a => a.role === 'visual' && a.evolutionState !== 'deprecated');
   const strategistAgent = agents.find(a => a.role === 'strategist' && a.evolutionState !== 'deprecated');
   const videoIntent = kind === 'video' ? inferVideoIntentProfile(request) : null;
+  const maxFidelity = kind === 'video' && wantsMaxFidelity(request);
   const scenePlan =
     kind === 'video' && videoIntent
       ? await generateSceneBreakdown(request, {
           platform: videoIntent.aspectRatio === '9:16' ? 'instagram' : 'youtube',
           contentType: mapVideoContentType(videoIntent),
           targetDuration: videoIntent.durationSeconds,
-          style: 'cinematic realism, premium streaming quality, natural performance',
+          style: maxFidelity
+            ? 'prestige streaming realism, premium production design, natural performance, controlled cinematic camera language'
+            : 'cinematic realism, premium streaming quality, natural performance',
         }).catch(() => null)
       : null;
 
@@ -164,6 +171,7 @@ Build a production-ready ${kind} generation plan that can be sent directly to a 
   - reel/shorts/tiktok => vertical 9:16 social-first pacing
   - long-form/youtube/explainer => 16:9 with longer narrative continuity
 - For video, target this inferred format: ${videoIntent ? `${videoIntent.format}, ${videoIntent.aspectRatio}, ${videoIntent.durationSeconds}s` : 'n/a'}
+- For video, if user requests Netflix/Seedance/high-quality output, prioritize prestige-grade realism, coherent character continuity, and physically plausible camera/lighting.
 - Generated outputs must stay brand-safe, monetizable, and avoid platform policy violations, unsafe claims, spam language, and generic AI phrasing.
 
 Return strict JSON:
@@ -210,7 +218,10 @@ Return strict JSON:
     prompt,
     negativePrompt: String(parsed.negativePrompt || '').trim() || undefined,
     aspectRatio: clampAspectRatio(parsed.aspectRatio || videoIntent?.aspectRatio),
-    durationSeconds: Number(parsed.durationSeconds) || videoIntent?.durationSeconds || 5,
+    durationSeconds:
+      kind === 'video' && maxFidelity
+        ? Math.max(Number(parsed.durationSeconds) || videoIntent?.durationSeconds || 8, 8)
+        : Number(parsed.durationSeconds) || videoIntent?.durationSeconds || 5,
     cameraAngle: String(parsed.cameraAngle || '').trim() || undefined,
     cameraMotion: String(parsed.cameraMotion || '').trim() || undefined,
     shotStyle: String(parsed.shotStyle || '').trim() || undefined,
@@ -312,6 +323,8 @@ export async function generateAgentVideo(
     provider?: VideoProvider;
   } = {}
 ): Promise<MediaGenerationResult> {
+  const maxFidelity = wantsMaxFidelity(request);
+  const minQualityScore = maxFidelity ? 88 : 82;
   let plan = await buildMediaPrompt(request, 'video', options.preferredModel);
   const providerAttempts: VideoProvider[] = options.provider
     ? [options.provider, options.provider === 'ltx23' ? 'ltx23-open' : 'ltx23']
@@ -355,7 +368,7 @@ export async function generateAgentVideo(
         prompt: plan.prompt,
         thumbnailUrl: result.thumbnailUrl,
       });
-      if (!quality.passed || (quality.score || 0) < 80) {
+      if (!quality.passed || (quality.score || 0) < minQualityScore) {
         lastError = new Error(quality.reason || 'Generated video failed quality validation');
         result = null;
       }
@@ -367,8 +380,8 @@ export async function generateAgentVideo(
         : '';
       plan = {
         ...plan,
-        prompt: `${plan.prompt} Improve temporal consistency, preserve face identity, keep wardrobe and props locked, maintain premium motion realism, and eliminate any AI-looking jitter or morphing.${storyboardStrength}`,
-        negativePrompt: `${plan.negativePrompt || ''}, face drift, identity drift, frame flicker, bad motion interpolation, slideshow pacing, warped limbs`,
+        prompt: `${plan.prompt} Improve temporal consistency, preserve face identity, keep wardrobe and props locked, maintain premium motion realism, and eliminate any AI-looking jitter or morphing. Use realistic lensing, motivated lighting, and grounded scene blocking.${storyboardStrength}`,
+        negativePrompt: `${plan.negativePrompt || ''}, face drift, identity drift, frame flicker, bad motion interpolation, slideshow pacing, warped limbs, plastic skin, over-sharpened edges, synthetic CGI look`,
       };
     }
   }

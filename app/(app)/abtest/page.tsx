@@ -5,12 +5,14 @@ import { useAuth } from '@/lib/context/AuthContext';
 import { GlassCard } from '@/components/nexus/GlassCard';
 import { NeonButton } from '@/components/nexus/NeonButton';
 import { LoadingPulse } from '@/components/nexus/LoadingPulse';
-import { TestTube2, BarChart3, TrendingUp } from 'lucide-react';
-import { createABTest, getABTests, updateABTestMetrics } from '@/lib/services/abTestService';
-import type { ABTest, ABTestVariant } from '@/lib/types';
+import { TestTube2 } from 'lucide-react';
+import { createABTest, getABTests } from '@/lib/services/abTestService';
+import type { ABTest, Platform } from '@/lib/types';
+
+type ABTestPlatform = Extract<Platform, 'twitter' | 'instagram' | 'linkedin' | 'tiktok'>;
 
 export default function ABTestPage() {
-  const { user } = useAuth();
+  useAuth();
   const [tests, setTests] = useState<ABTest[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -19,13 +21,9 @@ export default function ABTestPage() {
     description: '',
     contentA: '',
     contentB: '',
-    platform: 'twitter' as const,
+    platform: 'twitter' as ABTestPlatform,
     duration: 7,
   });
-
-  useEffect(() => {
-    loadTests();
-  }, []);
 
   const loadTests = async () => {
     try {
@@ -37,6 +35,14 @@ export default function ABTestPage() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      void loadTests();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, []);
 
   const handleCreateTest = async () => {
     if (!newTest.name || !newTest.contentA || !newTest.contentB) return;
@@ -124,7 +130,7 @@ export default function ABTestPage() {
                 <label className="text-sm font-medium mb-2 block">Platform</label>
                 <select
                   value={newTest.platform}
-                  onChange={(e) => setNewTest({ ...newTest, platform: e.target.value as any })}
+                  onChange={(e) => setNewTest({ ...newTest, platform: e.target.value as ABTestPlatform })}
                   className="w-full px-4 py-2 rounded-lg bg-muted/50 border border-border focus:border-[var(--nexus-cyan)] outline-none"
                 >
                   <option value="twitter">Twitter/X</option>
