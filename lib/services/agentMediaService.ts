@@ -10,11 +10,12 @@ import {
   generateImage as generateImageAsset,
   type ImageProvider,
 } from './imageGenerationService';
-import { validateImageQuality, quickValidateImage } from './mediaValidator';
+import { validateImageQuality, quickValidateImage, quickValidateVideo, validateVideoQuality } from './mediaValidator';
 import {
   generateVideo as generateVideoAsset,
   type VideoProvider,
 } from './videoGenerationService';
+import { generateSceneBreakdown, type ScenePlan } from './scenePlannerService';
 
 type MediaKind = 'image' | 'video';
 
@@ -28,6 +29,7 @@ interface MediaPromptPlan {
   shotStyle?: string;
   reasoning: string;
   agentOutputs: AgentOutput[];
+  scenePlan?: ScenePlan;
 }
 
 interface VideoIntentProfile {
@@ -74,6 +76,27 @@ function inferVideoIntentProfile(request: string): VideoIntentProfile {
   };
 }
 
+function mapVideoContentType(profile: VideoIntentProfile): ScenePlan['contentType'] {
+  switch (profile.format) {
+    case 'reel':
+      return 'reel';
+    case 'long':
+      return 'youtube-long';
+    case 'short':
+    default:
+      return 'youtube-short';
+  }
+}
+
+function describeScenePlan(plan: ScenePlan): string {
+  return plan.scenes
+    .slice(0, 8)
+    .map((scene, index) =>
+      `Scene ${index + 1}: ${scene.title}. ${scene.description}. ${scene.duration}s. ${scene.shotType} shot, ${scene.cameraAngle}, ${scene.lighting} lighting. ${scene.voiceover ? `VO: ${scene.voiceover}.` : ''} ${scene.dialogue ? `Dialogue: ${scene.dialogue}.` : ''} ${scene.textOverlay ? `On-screen text: ${scene.textOverlay}.` : ''}`
+    )
+    .join('\n');
+}
+
 async function buildMediaPrompt(
   request: string,
   kind: MediaKind,
@@ -87,6 +110,15 @@ async function buildMediaPrompt(
   const visualAgent = agents.find(a => a.role === 'visual' && a.evolutionState !== 'deprecated');
   const strategistAgent = agents.find(a => a.role === 'strategist' && a.evolutionState !== 'deprecated');
   const videoIntent = kind === 'video' ? inferVideoIntentProfile(request) : null;
+  const scenePlan =
+    kind === 'video' && videoIntent
+      ? await generateSceneBreakdown(request, {
+          platform: videoIntent.aspectRatio === '9:16' ? 'instagram' : 'youtube',
+          contentType: mapVideoContentType(videoIntent),
+          targetDuration: videoIntent.durationSeconds,
+          style: 'cinematic realism, premium streaming quality, natural performance',
+        }).catch(() => null)
+      : null;
 
   const aiProvider = async (prompt: string): Promise<string> =>
     universalChat(prompt, { model: preferredModel || 'gpt-4o', brandKit });
@@ -118,6 +150,7 @@ Memory context: ${memoryContext || 'none'}
 
 Specialist outputs:
 ${agentOutputs.map(output => `[${output.agentRole}] ${output.content}`).join('\n\n') || 'No specialist output available.'}
+${scenePlan ? `Storyboard plan:\n${describeScenePlan(scenePlan)}` : 'No storyboard plan available.'}
 
 Build a production-ready ${kind} generation plan that can be sent directly to a media model.
 - Do not return a concept pitch.
@@ -125,6 +158,7 @@ Build a production-ready ${kind} generation plan that can be sent directly to a 
 - The prompt must target final asset generation.
 - The negative prompt should aggressively avoid low quality, distorted anatomy, watermarks, text overlays, and extra limbs.
 - For video, optimize for motion, shot continuity, and the requested runtime format.
+- For video, use the storyboard plan to maintain scene continuity, character consistency, and clear progression from shot to shot.
 - For video, default to premium cinematic output with natural human performance, controlled camera language, realistic lighting, and no robotic or AI-looking motion.
 - For video, respect the requested format:
   - reel/shorts/tiktok => vertical 9:16 social-first pacing
@@ -182,6 +216,7 @@ Return strict JSON:
     shotStyle: String(parsed.shotStyle || '').trim() || undefined,
     reasoning: String(parsed.reasoning || '').trim() || 'Prompt synthesized by the media agent system.',
     agentOutputs,
+    scenePlan: scenePlan || undefined,
   };
 }
 
@@ -192,7 +227,7 @@ export async function generateAgentImage(
     provider?: ImageProvider;
   } = {}
 ): Promise<MediaGenerationResult> {
-  const plan = await buildMediaPrompt(request, 'image', options.preferredModel);
+  let plan = await buildMediaPrompt(request, 'image', options.preferredModel);
   const providerAttempts: Array<ImageProvider | undefined> = options.provider
     ? [options.provider, undefined]
     : [undefined];
@@ -200,35 +235,51 @@ export async function generateAgentImage(
   let result: Awaited<ReturnType<typeof generateImageAsset>> | null = null;
   let lastError: Error | null = null;
 
-  for (const provider of providerAttempts) {
-    try {
-      result = await generateImageAsset({
-        prompt: plan.prompt,
-        negativePrompt: plan.negativePrompt,
-        provider,
-        qualityTier: 'netflix',
-        width: plan.aspectRatio === '9:16' ? 1024 : 1024,
-        height: plan.aspectRatio === '9:16' ? 1792 : 1024,
-      });
-      break;
-    } catch (error) {
-      lastError = error as Error;
-      console.warn(`Agent image generation failed on ${provider || 'auto'}, retrying with fallback`, lastError);
+  for (let generationAttempt = 0; generationAttempt < 2 && !result; generationAttempt++) {
+    for (const provider of providerAttempts) {
+      try {
+        result = await generateImageAsset({
+          prompt: plan.prompt,
+          negativePrompt: plan.negativePrompt,
+          provider,
+          qualityTier: 'netflix',
+          width: plan.aspectRatio === '9:16' ? 1024 : 1024,
+          height: plan.aspectRatio === '9:16' ? 1792 : 1024,
+        });
+        break;
+      } catch (error) {
+        lastError = error as Error;
+        console.warn(`Agent image generation failed on ${provider || 'auto'}, retrying with fallback`, lastError);
+      }
+    }
+
+    if (!result) {
+      continue;
+    }
+
+    const quickValidation = quickValidateImage(result.url);
+    if (!quickValidation.valid) {
+      lastError = new Error(quickValidation.reason || 'Generated image was invalid');
+      result = null;
+    } else {
+      const quality = await validateImageQuality(result.url);
+      if (!quality.passed || (quality.score || 0) < 78) {
+        lastError = new Error(quality.reason || 'Generated image failed quality validation');
+        result = null;
+      }
+    }
+
+    if (!result && generationAttempt === 0) {
+      plan = {
+        ...plan,
+        prompt: `${plan.prompt} Improve subject realism, facial structure, hand anatomy, lighting contrast, and premium cinematic clarity. Avoid any artificial or game-engine look.`,
+        negativePrompt: `${plan.negativePrompt || ''}, malformed hands, weak face detail, flat lighting, plastic skin, amateur composition`,
+      };
     }
   }
 
   if (!result) {
     throw lastError || new Error('Image generation failed across providers');
-  }
-
-  const quickValidation = quickValidateImage(result.url);
-  if (!quickValidation.valid) {
-    throw new Error(quickValidation.reason || 'Generated image was invalid');
-  }
-
-  const quality = await validateImageQuality(result.url);
-  if (!quality.passed) {
-    throw new Error(quality.reason || 'Generated image failed quality validation');
   }
 
   await recordCost({
@@ -261,7 +312,7 @@ export async function generateAgentVideo(
     provider?: VideoProvider;
   } = {}
 ): Promise<MediaGenerationResult> {
-  const plan = await buildMediaPrompt(request, 'video', options.preferredModel);
+  let plan = await buildMediaPrompt(request, 'video', options.preferredModel);
   const providerAttempts: VideoProvider[] = options.provider
     ? [options.provider, options.provider === 'ltx23' ? 'ltx23-open' : 'ltx23']
     : ['ltx23', 'ltx23-open'];
@@ -269,23 +320,56 @@ export async function generateAgentVideo(
   let result: Awaited<ReturnType<typeof generateVideoAsset>> | null = null;
   let lastError: Error | null = null;
 
-  for (const provider of providerAttempts) {
-    try {
-      result = await generateVideoAsset({
+  for (let generationAttempt = 0; generationAttempt < 2 && !result; generationAttempt++) {
+    for (const provider of providerAttempts) {
+      try {
+        result = await generateVideoAsset({
+          prompt: plan.prompt,
+          negativePrompt: plan.negativePrompt,
+          provider,
+          aspectRatio: plan.aspectRatio,
+          durationSeconds: plan.durationSeconds,
+          cameraAngle: plan.cameraAngle,
+          cameraMotion: plan.cameraMotion,
+          shotStyle: plan.shotStyle,
+          qualityProfile: 'netflix',
+        });
+        break;
+      } catch (error) {
+        lastError = error as Error;
+        console.warn(`Agent video generation failed on ${provider}, retrying with fallback`, lastError);
+      }
+    }
+
+    if (!result) {
+      continue;
+    }
+
+    const quickValidation = quickValidateVideo(result.url, plan.prompt, result.thumbnailUrl);
+    if (!quickValidation.valid) {
+      lastError = new Error(quickValidation.reason || 'Generated video was invalid');
+      result = null;
+    } else {
+      const quality = await validateVideoQuality({
+        videoUrl: result.url,
         prompt: plan.prompt,
-        negativePrompt: plan.negativePrompt,
-        provider,
-        aspectRatio: plan.aspectRatio,
-        durationSeconds: plan.durationSeconds,
-        cameraAngle: plan.cameraAngle,
-        cameraMotion: plan.cameraMotion,
-        shotStyle: plan.shotStyle,
-        qualityProfile: 'netflix',
+        thumbnailUrl: result.thumbnailUrl,
       });
-      break;
-    } catch (error) {
-      lastError = error as Error;
-      console.warn(`Agent video generation failed on ${provider}, retrying with fallback`, lastError);
+      if (!quality.passed || (quality.score || 0) < 80) {
+        lastError = new Error(quality.reason || 'Generated video failed quality validation');
+        result = null;
+      }
+    }
+
+    if (!result && generationAttempt === 0) {
+      const storyboardStrength = plan.scenePlan
+        ? ` Preserve this storyboard continuity exactly:\n${describeScenePlan(plan.scenePlan)}`
+        : '';
+      plan = {
+        ...plan,
+        prompt: `${plan.prompt} Improve temporal consistency, preserve face identity, keep wardrobe and props locked, maintain premium motion realism, and eliminate any AI-looking jitter or morphing.${storyboardStrength}`,
+        negativePrompt: `${plan.negativePrompt || ''}, face drift, identity drift, frame flicker, bad motion interpolation, slideshow pacing, warped limbs`,
+      };
     }
   }
 

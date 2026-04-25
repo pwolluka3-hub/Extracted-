@@ -107,6 +107,7 @@ export interface AgentIntent {
     | 'generate_content'
     | 'create_image'
     | 'make_video'
+    | 'regenerate_media'
     | 'schedule_post'
     | 'analyze_performance'
     | 'read_file'

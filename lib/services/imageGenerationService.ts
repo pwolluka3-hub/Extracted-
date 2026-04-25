@@ -52,15 +52,21 @@ function buildEnhancedImagePrompt(options: ImageGenerationOptions): string {
       : qualityTier === 'premium'
         ? 'Quality target: premium commercial-grade realism and polished cinematic image quality.'
         : 'Quality target: clear, usable draft image quality.';
+  const photographicHint =
+    qualityTier === 'netflix' || qualityTier === 'premium'
+      ? 'Render as a real photograph of a live-action subject, not a drawing, not a painting, not a comic panel, not concept art. Professional studio or on-location photography quality.'
+      : 'Prefer realistic photographic rendering.';
 
   return [
     prompt.trim(),
     styleHints,
     qualityHint,
+    photographicHint,
     `Composition: ${getAspectDescriptor(width, height)}, strong focal subject separation, intentional framing, natural depth of field, coherent background detail.`,
     'Lighting: physically believable light, controlled contrast, cinematic highlight rolloff, no flat studio wash unless requested.',
-    'Human realism: anatomically correct hands, natural skin texture, realistic eyes, natural facial symmetry, believable fabric and material detail.',
-    'Image quality: high-end photography look, sharp subject detail, clean edges, no mushy textures, no posterized skin, no waxy face.',
+    'Human realism: anatomically correct hands, natural skin texture, realistic eyes, natural facial symmetry, believable fabric and material detail. Skin must look like real photographed skin, not airbrushed CGI.',
+    'Image quality: high-end photography look, sharp subject detail, clean edges, no mushy textures, no posterized skin, no waxy face. True-to-life lens rendering.',
+    'If the prompt describes a person or character, preserve one believable human identity and render them as a real person captured by a camera.',
     'Do not stylize the output into obvious AI art. Keep it natural, premium, and visually credible.',
   ].join(' ');
 }
@@ -94,6 +100,15 @@ function buildNegativePrompt(options: ImageGenerationOptions): string {
     'unnatural pose',
     'robotic expression',
     'cgi look',
+    '3d render',
+    'digital painting',
+    'anime',
+    'comic',
+    'illustration style',
+    'stylized face',
+    'doll face',
+    'beauty filter',
+    'airbrushed skin',
     'cartoon',
     'illustration',
   ]

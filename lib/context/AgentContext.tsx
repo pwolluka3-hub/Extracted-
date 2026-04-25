@@ -400,9 +400,14 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     const explicitGenerationPattern = /\b(create content|make content|write (a|an)? ?post|write captions?|create posts?|turn this into content|use this pdf|make posts? from|create reels?|create shorts?|generate content|caption for|script for|turn this into posts?|create a caption|make a reel|make a video script)\b/;
     const softIdeaPattern = /\b(content idea|post idea)\b/;
     const nichePattern = /\b(niche|nich)\s*(is|:|=)\b/;
+    const regeneratePattern = /\b(regenerate|redo|try again|another version|improve this|make it more realistic|make it better|fix this image|fix this video)\b/;
 
     if (explicitGenerationPattern.test(lowerMessage)) {
       return { type: 'generate_content', confidence: 0.95, params: {} };
+    }
+
+    if (regeneratePattern.test(lowerMessage)) {
+      return { type: 'regenerate_media', confidence: 0.95, params: {} };
     }
 
     if (nichePattern.test(lowerMessage)) {
@@ -445,6 +450,33 @@ export function AgentProvider({ children }: { children: ReactNode }) {
 
     return { type: 'answer_question', confidence: 0.5, params: {} };
   };
+
+  const getLastMediaContext = useCallback(() => {
+    for (let i = state.messages.length - 1; i >= 0; i--) {
+      const assistantMessage = state.messages[i];
+      if (assistantMessage.role !== 'assistant' || !assistantMessage.media?.length) continue;
+
+      const mediaAsset = assistantMessage.media[0];
+      for (let j = i - 1; j >= 0; j--) {
+        const priorUser = state.messages[j];
+        if (priorUser.role !== 'user') continue;
+
+        return {
+          kind: mediaAsset.type === 'video' ? 'video' : 'image',
+          prompt: mediaAsset.prompt || priorUser.content,
+          userRequest: priorUser.content,
+        };
+      }
+
+      return {
+        kind: mediaAsset.type === 'video' ? 'video' : 'image',
+        prompt: mediaAsset.prompt || assistantMessage.content,
+        userRequest: mediaAsset.prompt || assistantMessage.content,
+      };
+    }
+
+    return null;
+  }, [state.messages]);
 
   const inferPlatformsFromContext = async (message: string): Promise<Platform[]> => {
     const lowerMessage = message.toLowerCase();
@@ -786,6 +818,67 @@ export function AgentProvider({ children }: { children: ReactNode }) {
         return;
       }
 
+      if (intent.type === 'regenerate_media') {
+        const lastMedia = getLastMediaContext();
+        if (!lastMedia) {
+          throw new Error('No previous image or video generation was found to regenerate.');
+        }
+
+        const regenerationPrompt = `${lastMedia.userRequest}\n\nRegeneration instructions: ${content}\n\nPrevious generation prompt:\n${lastMedia.prompt}`;
+
+        if (lastMedia.kind === 'image') {
+          setState(s => ({ ...s, currentTask: 'Regenerating image...' }));
+          const imageResult = await generateAgentImage(regenerationPrompt, {
+            preferredModel: state.currentModel,
+            provider: state.currentImageProvider,
+          });
+
+          const assistantMessage: ChatMessage = {
+            id: generateId(),
+            role: 'assistant',
+            content: imageResult.content,
+            media: imageResult.media,
+            timestamp: new Date().toISOString(),
+          };
+
+          setState(s => ({
+            ...s,
+            messages: [...s.messages, assistantMessage],
+            isThinking: false,
+            currentTask: null,
+          }));
+
+          await saveChatMessage(assistantMessage);
+          await extractAndSaveMemory(content, imageResult.content, intent);
+          return;
+        }
+
+        setState(s => ({ ...s, currentTask: 'Regenerating video...' }));
+        const videoResult = await generateAgentVideo(regenerationPrompt, {
+          preferredModel: state.currentModel,
+          provider: state.currentVideoProvider,
+        });
+
+        const assistantMessage: ChatMessage = {
+          id: generateId(),
+          role: 'assistant',
+          content: videoResult.content,
+          media: videoResult.media,
+          timestamp: new Date().toISOString(),
+        };
+
+        setState(s => ({
+          ...s,
+          messages: [...s.messages, assistantMessage],
+          isThinking: false,
+          currentTask: null,
+        }));
+
+        await saveChatMessage(assistantMessage);
+        await extractAndSaveMemory(content, videoResult.content, intent);
+        return;
+      }
+
       if (intent.type === 'make_video') {
         setState(s => ({ ...s, currentTask: 'Generating video...' }));
         const videoResult = await generateAgentVideo(userPrompt, {
@@ -901,7 +994,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
         currentTask: null,
       }));
     }
-  }, [state.currentModel, state.currentImageProvider, state.currentVideoProvider, state.messages, state.pendingFiles]);
+  }, [getLastMediaContext, state.currentModel, state.currentImageProvider, state.currentVideoProvider, state.messages, state.pendingFiles]);
 
   // Multi-agent system methods
   const toggleMultiAgent = useCallback(() => {

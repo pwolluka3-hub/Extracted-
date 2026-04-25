@@ -14,6 +14,18 @@ interface ValidationResult {
   };
 }
 
+export interface VideoValidationResult {
+  passed: boolean;
+  score?: number;
+  reason?: string;
+  details?: {
+    playable: boolean;
+    hasThumbnail: boolean;
+    promptStrength: boolean;
+    thumbnailQuality?: boolean;
+  };
+}
+
 // Validate image quality using AI vision
 export async function validateImageQuality(imageUrl: string): Promise<ValidationResult> {
   try {
@@ -123,6 +135,83 @@ export function quickValidateImage(
   }
 
   return { valid: true };
+}
+
+export function quickValidateVideo(
+  videoUrl: string,
+  prompt?: string,
+  thumbnailUrl?: string
+): { valid: boolean; reason?: string } {
+  if (!videoUrl) {
+    return { valid: false, reason: 'No video URL provided' };
+  }
+
+  if (!videoUrl.startsWith('http') && !videoUrl.startsWith('data:')) {
+    return { valid: false, reason: 'Invalid video URL format' };
+  }
+
+  if (videoUrl.includes('error') || videoUrl.includes('failed')) {
+    return { valid: false, reason: 'Video URL indicates an error' };
+  }
+
+  if (!prompt || prompt.trim().length < 120) {
+    return { valid: false, reason: 'Video prompt was too weak for premium output' };
+  }
+
+  if (/\b(generic|any person|somebody|nice background|beautiful scene)\b/i.test(prompt)) {
+    return { valid: false, reason: 'Video prompt is too generic' };
+  }
+
+  return { valid: true };
+}
+
+export async function validateVideoQuality(input: {
+  videoUrl: string;
+  prompt: string;
+  thumbnailUrl?: string;
+}): Promise<VideoValidationResult> {
+  const quick = quickValidateVideo(input.videoUrl, input.prompt, input.thumbnailUrl);
+  if (!quick.valid) {
+    return {
+      passed: false,
+      score: 35,
+      reason: quick.reason,
+      details: {
+        playable: false,
+        hasThumbnail: !!input.thumbnailUrl,
+        promptStrength: false,
+      },
+    };
+  }
+
+  let thumbnailQuality: ValidationResult | null = null;
+  if (input.thumbnailUrl) {
+    thumbnailQuality = await validateImageQuality(input.thumbnailUrl);
+  }
+
+  const promptStrong =
+    input.prompt.length >= 200 &&
+    /\b(camera|lighting|motion|composition|continuity|cinematic|realistic)\b/i.test(input.prompt);
+  const thumbnailPassed = thumbnailQuality ? thumbnailQuality.passed && (thumbnailQuality.score || 0) >= 75 : true;
+  const score = Math.round(
+    (promptStrong ? 45 : 20) +
+    (input.thumbnailUrl ? 15 : 5) +
+    (thumbnailPassed ? 35 : 10)
+  );
+
+  return {
+    passed: promptStrong && thumbnailPassed,
+    score,
+    reason: promptStrong && thumbnailPassed
+      ? undefined
+      : thumbnailQuality?.reason || (!promptStrong ? 'Prompt did not provide enough premium visual control' : 'Thumbnail quality was weak'),
+    details: {
+      playable: true,
+      hasThumbnail: !!input.thumbnailUrl,
+      promptStrength: promptStrong,
+      thumbnailQuality: thumbnailPassed,
+    },
+  };
 }
 
 // Validate text content for platform compliance
