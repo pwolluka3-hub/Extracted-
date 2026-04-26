@@ -27,16 +27,17 @@ const nextConfig = {
             // BUG FIX #3: Harden CSP - remove unsafe-eval, restrict unsafe-inline
             value: [
               "default-src 'self'",
-              "script-src 'self' https://js.puter.com https://cdn.puter.com 'wasm-unsafe-eval'",
+              "script-src 'self' https://js.puter.com https://cdn.puter.com https://puter.com https://*.puter.com 'wasm-unsafe-eval'",
               "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
               "font-src 'self' https://fonts.gstatic.com",
               "img-src 'self' data: https:",
               "media-src 'self' data: https:",
-              "connect-src 'self' https://js.puter.com https://api.puter.com https: ws: wss:",
+              "connect-src 'self' https://js.puter.com https://api.puter.com https://puter.com https://*.puter.com https: ws: wss:",
+              "frame-src 'self' https://puter.com https://*.puter.com",
               "worker-src 'self' blob:",
               "frame-ancestors 'none'",
               "base-uri 'self'",
-              "form-action 'self'",
+              "form-action 'self' https://puter.com https://*.puter.com",
               "upgrade-insecure-requests",
             ].join('; ')
           },
