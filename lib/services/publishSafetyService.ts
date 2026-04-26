@@ -9,7 +9,7 @@ import { universalChat } from './aiService';
 import { loadAgentMemory } from './agentMemoryService';
 import type { BrandKit, Platform } from '@/lib/types';
 import { publishPost, schedulePost } from './publishService';
-import { validateContent } from './governorService';
+import { validateContent, makeGovernorDecision } from './governorService';
 
 export interface PublishSafetyConfig {
   requireApproval: boolean;
@@ -531,7 +531,7 @@ export async function approveContent(
 
   const request: ApprovalRequest = {
     ...pending[index],
-    status: 'approved',
+    status: 'pending',
     reviewedAt: new Date().toISOString(),
     reviewedBy,
     notes,
@@ -547,35 +547,51 @@ export async function approveContent(
       success: false,
       message: `Blocked by safety checks: ${request.safetyCheck.blockedReasons.join(', ') || 'manual review required'}`,
     };
+    request.status = 'rejected';
   } else {
     try {
-      if (request.scheduledTime) {
-        const result = await schedulePost({
-          text: request.content,
-          platforms: request.platforms,
-          scheduledDate: request.scheduledTime,
-          mediaUrl: request.mediaUrl,
-        });
+      const governorValidation = await validateContent(request.content, {
+        platform: request.platforms[0],
+      });
+      const governorDecision = await makeGovernorDecision(governorValidation, {});
+
+      if (!governorDecision.approved) {
         publishResult = {
-          success: result.success,
-          message: result.success ? 'Scheduled successfully' : result.error || 'Scheduling failed',
+          success: false,
+          message: `Blocked by governor: ${governorDecision.reason}`,
         };
+        request.status = 'rejected';
       } else {
-        const result = await publishPost({
-          text: request.content,
-          platforms: request.platforms,
-          mediaUrl: request.mediaUrl,
-        });
-        publishResult = {
-          success: result.success,
-          message: result.success ? 'Published successfully' : Object.values(result.errors || {}).join(', '),
-        };
+        request.status = 'approved';
+        if (request.scheduledTime) {
+          const result = await schedulePost({
+            text: request.content,
+            platforms: request.platforms,
+            scheduledDate: request.scheduledTime,
+            mediaUrl: request.mediaUrl,
+          });
+          publishResult = {
+            success: result.success,
+            message: result.success ? 'Scheduled successfully' : result.error || 'Scheduling failed',
+          };
+        } else {
+          const result = await publishPost({
+            text: request.content,
+            platforms: request.platforms,
+            mediaUrl: request.mediaUrl,
+          });
+          publishResult = {
+            success: result.success,
+            message: result.success ? 'Published successfully' : Object.values(result.errors || {}).join(', '),
+          };
+        }
       }
     } catch (error) {
       publishResult = {
         success: false,
         message: (error as Error).message,
       };
+      request.status = 'rejected';
     }
   }
 
@@ -620,14 +636,14 @@ export async function rejectContent(
   
   // Move to history
   const history = await loadApprovalHistory();
-  history.push(pending[index]);
+  history.push(rejectedRequest);
   await writeFile(`${PATHS.settings}/approval-history.json`, history);
 
   // Remove from pending
   pending.splice(index, 1);
   await writeFile(`${PATHS.settings}/pending-approvals.json`, pending);
 
-  return pending[index];
+  return rejectedRequest;
 }
 
 // Load approval history

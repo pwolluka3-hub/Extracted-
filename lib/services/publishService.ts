@@ -1,6 +1,7 @@
 // Publishing Service - Ayrshare API integration
 import type { Platform, ContentDraft } from '@/lib/types';
 import { kvGet } from './puterService';
+import { validateContent, makeGovernorDecision } from './governorService';
 
 const AYRSHARE_API_BASE = 'https://api.ayrshare.com/api';
 
@@ -343,6 +344,28 @@ export async function publishDraft(
   const latestVersion = draft.versions[draft.versions.length - 1];
   if (!latestVersion) {
     return { success: false, errors: { general: 'No content version found' } };
+  }
+
+  if (draft.status !== 'approved' && draft.status !== 'scheduled') {
+    return {
+      success: false,
+      errors: {
+        general: `Workflow blocked: draft status "${draft.status}" cannot be published. Move through review -> approved first.`,
+      },
+    };
+  }
+
+  const governorValidation = await validateContent(latestVersion.text, {
+    platform: draft.platforms[0],
+  });
+  const governorDecision = await makeGovernorDecision(governorValidation, {});
+  if (!governorDecision.approved) {
+    return {
+      success: false,
+      errors: {
+        general: `Governor blocked publish: ${governorDecision.reason}`,
+      },
+    };
   }
 
   if (immediate) {
