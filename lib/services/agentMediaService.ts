@@ -40,6 +40,8 @@ interface MediaPromptPlan {
   };
   brandFitCheck?: string;
   expectedPerformance?: string;
+  cameraSpecs?: string;
+  audioPlan?: string;
 }
 
 interface VideoIntentProfile {
@@ -92,6 +94,53 @@ function wantsMaxFidelity(request: string): boolean {
 
 function wantsHumanStudioRealism(request: string): boolean {
   return /\b(character|portrait|human|person|man|woman|face|facial|skin|realistic person|studio photo|photoreal)\b/i.test(request);
+}
+
+function inferCameraSpecs(request: string, kind: MediaKind): {
+  focalLength: '24mm' | '35mm' | '50mm' | '85mm' | '135mm';
+  aperture: 'f/2.0' | 'f/2.8' | 'f/4.0' | 'f/5.6';
+  frameRate?: '24fps' | '30fps' | '60fps';
+  movement?: string;
+} {
+  const lower = request.toLowerCase();
+  const focalLength = /\b135mm\b/.test(lower)
+    ? '135mm'
+    : /\b85mm\b/.test(lower)
+    ? '85mm'
+    : /\b50mm\b/.test(lower)
+    ? '50mm'
+    : /\b35mm\b/.test(lower)
+    ? '35mm'
+    : '24mm';
+  const aperture = /\bf\/?5\.6\b/.test(lower)
+    ? 'f/5.6'
+    : /\bf\/?4(\.0)?\b/.test(lower)
+    ? 'f/4.0'
+    : /\bf\/?2(\.0)?\b/.test(lower)
+    ? 'f/2.0'
+    : 'f/2.8';
+  const frameRate = kind === 'video'
+    ? /\b60fps\b/.test(lower)
+      ? '60fps'
+      : /\b30fps\b/.test(lower)
+      ? '30fps'
+      : '24fps'
+    : undefined;
+  const movement = kind === 'video'
+    ? /\b(orbit)\b/.test(lower)
+      ? 'slow orbit'
+      : /\b(push[- ]?in|dolly in)\b/.test(lower)
+      ? 'slow push-in'
+      : /\b(pull[- ]?out|dolly back)\b/.test(lower)
+      ? 'dolly pull-out'
+      : /\b(track|tracking)\b/.test(lower)
+      ? 'stabilized tracking shot'
+      : /\b(pan)\b/.test(lower)
+      ? 'controlled pan'
+      : 'gimbal-stabilized cinematic move'
+    : undefined;
+
+  return { focalLength, aperture, frameRate, movement };
 }
 
 function inferImagePlatform(request: string): {
@@ -193,6 +242,7 @@ async function buildMediaPrompt(
   const strategistAgent = agents.find(a => a.role === 'strategist' && a.evolutionState !== 'deprecated');
   const videoIntent = kind === 'video' ? inferVideoIntentProfile(request) : null;
   const imageIntent = kind === 'image' ? inferImagePlatform(request) : null;
+  const cameraSpecs = inferCameraSpecs(request, kind);
   const maxFidelity = kind === 'video' && wantsMaxFidelity(request);
   const humanStudioRealism = kind === 'image' && wantsHumanStudioRealism(request);
   const scenePlan =
@@ -248,6 +298,8 @@ Build a production-ready ${kind} generation plan that can be sent directly to a 
 - For image, output a stop-scroll composition tailored to the target platform and dimensions.
 - For image, avoid cartoon, illustration, game-art, and synthetic plastic skin aesthetics.
 - For image, if the subject is a human/character/portrait, enforce natural live-action studio realism, accurate anatomy, realistic skin texture, and true-to-camera lens behavior.
+- Apply premium camera specs: ${cameraSpecs.focalLength}, ${cameraSpecs.aperture}${cameraSpecs.frameRate ? `, ${cameraSpecs.frameRate}` : ''}${cameraSpecs.movement ? `, movement: ${cameraSpecs.movement}` : ''}.
+- Apply cinematic color science: rich blacks, lifted shadows, controlled highlight rolloff, cool shadow tones with warm accents, and natural skin tones.
 - For video, optimize for motion, shot continuity, and the requested runtime format.
 - For video, use the storyboard plan to maintain scene continuity, character consistency, and clear progression from shot to shot.
 - For video, default to premium cinematic output with natural human performance, controlled camera language, realistic lighting, and no robotic or AI-looking motion.
@@ -257,6 +309,7 @@ Build a production-ready ${kind} generation plan that can be sent directly to a 
 - For video, target this inferred format: ${videoIntent ? `${videoIntent.format}, ${videoIntent.aspectRatio}, ${videoIntent.durationSeconds}s` : 'n/a'}
 - For video, if user requests Netflix/Seedance/high-quality output, prioritize prestige-grade realism, coherent character continuity, and physically plausible camera/lighting.
 - Generated outputs must stay brand-safe, monetizable, and avoid platform policy violations, unsafe claims, spam language, and generic AI phrasing.
+${kind === 'video' ? '- Include explicit audio guidance: voice-forward mix, subtle underscore, clean transition SFX, avoid clipping and muddy low-end.' : ''}
 ${imageIntent ? `- For image, target platform: ${imageIntent.platform}, ${imageIntent.dimensions}, ratio ${imageIntent.aspectRatio}. ${imageIntent.optimizationNotes}` : ''}
 ${humanStudioRealism ? '- For image, force an editorial studio photography result and explicitly reject stylized/cartoon outputs.' : ''}
 
@@ -279,7 +332,9 @@ Return strict JSON:
     "fallback_replicate": "simpler focused prompt for Replicate"
   },
   "brandFitCheck": "one line about NexusAI visual alignment",
-  "expectedPerformance": "one line about why it should perform on the target platform"
+  "expectedPerformance": "one line about why it should perform on the target platform",
+  "cameraSpecs": "camera package summary",
+  "audioPlan": "audio mix summary for video, optional for image"
 }`;
 
   const synthesis = await universalChat(synthesisPrompt, {
@@ -344,6 +399,8 @@ Return strict JSON:
         : undefined,
     brandFitCheck: String(parsed.brandFitCheck || '').trim() || undefined,
     expectedPerformance: String(parsed.expectedPerformance || '').trim() || undefined,
+    cameraSpecs: String(parsed.cameraSpecs || '').trim() || undefined,
+    audioPlan: String(parsed.audioPlan || '').trim() || undefined,
   };
 }
 
@@ -377,7 +434,7 @@ export async function generateAgentImage(
     ? {
         prompt: humanStudioRealism
           ? `${request.trim()} Render as a natural live-action studio portrait photo for ${inferredImageIntent.platform} ${inferredImageIntent.dimensions}. Real human skin texture, realistic face proportions, natural lighting, premium editorial photography, 85mm lens look, high-end DSLR quality, sharp focus, cinematic but realistic color grade. Integrate subtle cyan (#00F5FF) and violet (#BF5FFF) accents over a dark modern background. Not illustration, not cartoon, not CGI. ${inferredImageIntent.optimizationNotes}`
-          : `${request.trim()} ${inferredImageIntent.optimizationNotes} Integrate NexusAI brand accents: cyan (#00F5FF), violet (#BF5FFF), dark premium backdrop.`,
+          : `${request.trim()} ${inferredImageIntent.optimizationNotes} Integrate NexusAI brand accents: cyan (#00F5FF), violet (#BF5FFF), dark premium backdrop. Camera: ${inferCameraSpecs(request, 'image').focalLength}, ${inferCameraSpecs(request, 'image').aperture}, professional editorial lensing.`,
         negativePrompt: humanStudioRealism
           ? 'cartoon, anime, illustration, painting, cgi, doll face, plastic skin, stylized face, game art, comic style, extra fingers, distorted hands, deformed anatomy, lowres, blurry, watermark'
           : undefined,
@@ -394,6 +451,7 @@ export async function generateAgentImage(
         },
         brandFitCheck: 'Dark futuristic palette with cyan/violet accents and premium human-real output.',
         expectedPerformance: `${inferredImageIntent.platform}-optimized composition built for fast comprehension and high stop-scroll potential.`,
+        cameraSpecs: `${inferCameraSpecs(request, 'image').focalLength}, ${inferCameraSpecs(request, 'image').aperture}, shallow depth cinematic portrait package.`,
       }
     : await buildMediaPrompt(request, 'image', options.preferredModel);
   const generationStrategies: Array<{
@@ -488,6 +546,7 @@ Fallback Prompts: ${JSON.stringify(
     )}
 Brand Fit Check: ${plan.brandFitCheck || 'Aligned to NexusAI dark futuristic aesthetic with cyan/violet accent language.'}
 Expected Performance: ${plan.expectedPerformance || 'Composed for quick feed readability, strong focal hierarchy, and social save/share potential.'}
+Camera Specs: ${plan.cameraSpecs || '50mm-85mm portrait package, shallow depth of field, cinematic color grade.'}
 
 Generated image provider: ${result.provider}`,
     media: [
@@ -586,7 +645,22 @@ export async function generateAgentVideo(
   });
 
   return {
-    content: `Generated a video with ${result.provider}.\n\nPrompt used: ${plan.prompt}`,
+    content: `Platform: ${plan.aspectRatio === '9:16' ? 'Reels/TikTok/Shorts' : 'YouTube/Long-form'}
+Message Hook: ${plan.messageHook || 'Cinematic narrative with immediate visual hook and clean payoff.'}
+Primary Prompt: ${plan.prompt}
+Fallback Prompts: ${JSON.stringify(
+      plan.fallbackPrompts || {
+        primary: plan.prompt,
+        fallback_stability: `${plan.prompt} cinematic realism, stable motion, natural human performance`,
+        fallback_midjourney: `${plan.prompt} cinematic frame references --ar ${plan.aspectRatio === '9:16' ? '9:16' : '16:9'}`,
+      }
+    )}
+Brand Fit Check: ${plan.brandFitCheck || 'Dark futurist visual language with cyan/violet brand accents and human-centered realism.'}
+Expected Performance: ${plan.expectedPerformance || 'Optimized pacing and camera continuity for retention and replay value.'}
+Camera Specs: ${plan.cameraSpecs || `${plan.cameraAngle || 'eye-level'}, ${plan.cameraMotion || 'controlled movement'}, ${plan.shotStyle || 'cinematic framing'}, 24fps intent`}
+Audio Plan: ${plan.audioPlan || 'Voice-forward mix with subtle cinematic underscore and clean transition effects.'}
+
+Generated video provider: ${result.provider}`,
     media: [
       {
         type: 'video',
