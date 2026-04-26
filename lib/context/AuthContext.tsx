@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from 'react';
-import { signIn, signOut, getUser, isSignedIn, getCachedAuthUser, clearCachedAuth } from '@/lib/services/puterService';
+import { signIn, signOut, getUser, isSignedIn, getCachedAuthUser, hasCachedAuthSession, clearCachedAuth } from '@/lib/services/puterService';
 import { initMemory, isOnboardingComplete, loadBrandKit } from '@/lib/services/memoryService';
 import type { BrandKit } from '@/lib/types';
 
@@ -40,10 +40,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const authenticated = await isSignedIn().catch(() => false);
         const user = authenticated ? await getUser().catch(() => getCachedAuthUser()) : null;
+        const cachedUser = getCachedAuthUser();
+        const hasLocalSession = !!cachedUser && hasCachedAuthSession();
 
         if (!mounted) return;
 
-        if (!authenticated) {
+        if (!authenticated && !hasLocalSession) {
           clearCachedAuth();
           setState({
             isLoading: false,
@@ -66,7 +68,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setState({
           isLoading: false,
           isAuthenticated: true,
-          user,
+          user: user || cachedUser,
           onboardingComplete: onboarding,
           brandKit,
         });
@@ -91,13 +93,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (): Promise<boolean> => {
     try {
       const user = await signIn();
-      
+
       if (user) {
         await initMemory();
-        
+
         const [onboarding, brandKit] = await Promise.all([
-          isOnboardingComplete(),
-          loadBrandKit(),
+          isOnboardingComplete().catch(() => false),
+          loadBrandKit().catch(() => null),
         ]);
 
         setState({

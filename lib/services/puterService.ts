@@ -2,6 +2,8 @@
 // All Puter operations go through this service
 
 const PUTER_READY_TIMEOUT = 8000;
+const PUTER_AUTH_TIMEOUT = 45000;
+const PUTER_AUTH_POLL_INTERVAL = 500;
 const PUTER_SCRIPT_URL = 'https://js.puter.com/v2/';
 const LOCAL_KV_PREFIX = 'nexus:kv:';
 const LOCAL_FILE_PREFIX = 'nexus:file:';
@@ -77,6 +79,15 @@ export function clearCachedAuth(): void {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readAuthenticatedUser(): Promise<{ username: string } | null> {
+  if (typeof window === 'undefined' || !window.puter) return null;
+
+  const signedIn = await window.puter.auth.isSignedIn().catch(() => false);
+  if (!signedIn) return null;
+
+  return await window.puter.auth.getUser().catch(() => null);
 }
 
 function ensurePuterScript(): Promise<boolean> {
@@ -208,23 +219,46 @@ export async function signIn(): Promise<{ username: string } | null> {
       throw new Error('Puter not available');
     }
 
-    if (typeof window.puter.ui?.authenticateWithPuter === 'function') {
-      await window.puter.ui.authenticateWithPuter();
-    } else {
-      await window.puter.auth.signIn();
-    }
+    const authAction = typeof window.puter.ui?.authenticateWithPuter === 'function'
+      ? () => window.puter.ui.authenticateWithPuter!()
+      : () => window.puter.auth.signIn();
 
-    for (let attempt = 0; attempt < 20; attempt++) {
-      const signedIn = await window.puter.auth.isSignedIn().catch(() => false);
-      const user = signedIn ? await window.puter.auth.getUser().catch(() => null) : null;
-      if (signedIn && user) {
+    let authError: unknown = null;
+    const authAttempt = Promise.resolve()
+      .then(() => authAction())
+      .catch((error) => {
+        authError = error;
+      });
+
+    const deadline = Date.now() + PUTER_AUTH_TIMEOUT;
+
+    while (Date.now() < deadline) {
+      const user = await readAuthenticatedUser();
+      if (user) {
         cacheUser(user);
         return user;
       }
-      await sleep(250);
+
+      if (authError) {
+        break;
+      }
+
+      await Promise.race([authAttempt, sleep(PUTER_AUTH_POLL_INTERVAL)]);
     }
 
-    throw new Error('Puter auth completed without a user session');
+    await Promise.race([authAttempt, sleep(1000)]);
+
+    const finalUser = await readAuthenticatedUser();
+    if (finalUser) {
+      cacheUser(finalUser);
+      return finalUser;
+    }
+
+    if (authError instanceof Error) {
+      throw authError;
+    }
+
+    throw new Error('Puter auth timed out before a user session became available');
   } catch (error) {
     console.error('Puter signIn error:', error);
     clearCachedAuth();
