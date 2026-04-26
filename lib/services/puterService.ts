@@ -75,10 +75,21 @@ function ensurePuterScript(): Promise<boolean> {
     const existingScript = document.querySelector(`script[src="${PUTER_SCRIPT_URL}"]`) as HTMLScriptElement | null;
 
     if (existingScript) {
-      existingScript.addEventListener('load', () => resolve(true), { once: true });
-      existingScript.addEventListener('error', () => resolve(false), { once: true });
-      // In case it already loaded before listeners were attached.
-      setTimeout(() => resolve(!!window.puter), 50);
+      if (window.puter) {
+        resolve(true);
+        return;
+      }
+
+      let settled = false;
+      const finish = (value: boolean) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+
+      existingScript.addEventListener('load', () => finish(true), { once: true });
+      existingScript.addEventListener('error', () => finish(false), { once: true });
+      setTimeout(() => finish(!!window.puter), PUTER_READY_TIMEOUT);
       return;
     }
 

@@ -64,16 +64,14 @@ function LandingContent() {
         setPuterReady(ready);
         if (!ready) {
           setAuthError('Puter failed to load. Check your connection and retry.');
-        } else {
-          setAuthError('Puter is ready. Tap again to authorize.');
+          return;
         }
-        return;
       }
 
       const success = await login();
       if (success) {
         const destination = nextPath || (onboardingComplete ? '/dashboard' : '/onboarding');
-        router.push(destination);
+        window.location.assign(destination);
       } else {
         setAuthError('Puter sign-in did not complete. Please try again.');
       }
