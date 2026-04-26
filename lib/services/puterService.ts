@@ -241,18 +241,36 @@ export async function kvList(): Promise<string[]> {
 const BASE_PATH = '/NexusAI';
 
 async function ensureDir(path: string): Promise<void> {
+  // BUG FIX #1: Add null check for window.puter
+  if (typeof window === 'undefined') {
+    throw new Error('ensureDir: window object not available');
+  }
+  
+  if (!window.puter) {
+    throw new Error('ensureDir: Puter not initialized. Ensure Puter.js has loaded.');
+  }
+  
+  if (!window.puter.fs) {
+    throw new Error('ensureDir: Puter filesystem not available');
+  }
+
   try {
     const exists = await window.puter.fs.exists(path);
     if (!exists) {
       await window.puter.fs.mkdir(path);
     }
-  } catch {
+  } catch (error) {
     // Directory might already exist or parent doesn't exist
     // Try to create it anyway
     try {
       await window.puter.fs.mkdir(path);
-    } catch {
-      // Ignore if already exists
+    } catch (mkdirError) {
+      console.error(`[ensureDir] Failed to ensure directory ${path}:`, mkdirError);
+      // Ignore if already exists, but log the error
+      if (String(mkdirError).includes('EEXIST')) {
+        return; // Directory already exists, that's fine
+      }
+      throw mkdirError;
     }
   }
 }

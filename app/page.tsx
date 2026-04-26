@@ -35,7 +35,9 @@ function LandingContent() {
           router.push('/onboarding');
         }
       } catch (error) {
-        console.error('[v0] Navigation error:', error);
+        console.error('[LandingPage] Navigation error:', error);
+        // Fallback to onboarding on error
+        router.push('/onboarding');
       }
     }
   }, [isAuthenticated, user, onboardingComplete, hasRedirected, nextPath, router]);

@@ -59,9 +59,39 @@ type RoutedProvider =
   | 'fireworks'
   | 'ollama';
 
+const PROVIDER_KEY_CANDIDATES: Record<Exclude<RoutedProvider, 'puter' | 'ollama'>, string[]> = {
+  openrouter: ['openrouter_key', 'provider_openrouter_apiKey'],
+  githubmodels: ['github_models_key', 'provider_githubmodels_apiKey'],
+  bytez: ['bytez_key', 'provider_bytez_apiKey'],
+  poe: ['poe_key', 'provider_poe_apiKey'],
+  groq: ['groq_key', 'provider_groq_apiKey'],
+  gemini: ['gemini_key', 'provider_gemini_apiKey'],
+  deepseek: ['deepseek_key', 'provider_deepseek_apiKey'],
+  nvidia: ['nvidia_key', 'provider_nvidia_apiKey'],
+  together: ['together_key', 'provider_together_apiKey'],
+  fireworks: ['fireworks_key', 'provider_fireworks_apiKey'],
+};
+
+const providerCooldownUntil = new Map<RoutedProvider, number>();
+const PROVIDER_COOLDOWN_MS = 5 * 60 * 1000;
+
 // Sleep utility
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function getFirstConfiguredValue(keys: string[]): Promise<string | null> {
+  for (const key of keys) {
+    const value = await kvGet(key);
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+async function getProviderApiKey(provider: Exclude<RoutedProvider, 'puter' | 'ollama'>): Promise<string | null> {
+  return getFirstConfiguredValue(PROVIDER_KEY_CANDIDATES[provider]);
 }
 
 function buildMessageArray(
@@ -107,6 +137,7 @@ function isQuotaOrBillingError(message: string): boolean {
     text.includes('billing') ||
     text.includes('payment required') ||
     text.includes('402') ||
+    text.includes('insufficient_quota') ||
     text.includes('credit balance') ||
     text.includes('usage limit') ||
     text.includes('exceeded your current quota')
@@ -134,6 +165,39 @@ function isRetriableProviderError(message: string): boolean {
 function isConfigurationError(message: string): boolean {
   const text = message.toLowerCase();
   return text.includes('not configured') || text.includes('api key') || text.includes('missing');
+}
+
+function isProviderInCooldown(provider: RoutedProvider): boolean {
+  const until = providerCooldownUntil.get(provider);
+  if (!until) return false;
+  if (Date.now() > until) {
+    providerCooldownUntil.delete(provider);
+    return false;
+  }
+  return true;
+}
+
+function applyProviderCooldown(provider: RoutedProvider, errorMessage: string): void {
+  if (!isQuotaOrBillingError(errorMessage)) return;
+  providerCooldownUntil.set(provider, Date.now() + PROVIDER_COOLDOWN_MS);
+}
+
+type PuterChatStreamChunk = { text?: unknown };
+type PuterChatResponse = { message?: { content?: unknown } };
+
+function isAsyncIterableResponse(value: unknown): value is AsyncIterable<PuterChatStreamChunk> {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    Symbol.asyncIterator in (value as Record<PropertyKey, unknown>) &&
+    typeof (value as AsyncIterable<unknown>)[Symbol.asyncIterator] === 'function'
+  );
+}
+
+function hasChatMessageResponse(value: unknown): value is { message: { content: string } } {
+  if (!value || typeof value !== 'object') return false;
+  const maybeMessage = (value as PuterChatResponse).message;
+  return !!maybeMessage && typeof maybeMessage === 'object' && typeof maybeMessage.content === 'string';
 }
 
 async function callOpenAICompatibleChat(
@@ -166,16 +230,16 @@ async function callOpenAICompatibleChat(
 
 async function getConfiguredProviders(): Promise<RoutedProvider[]> {
   const keyChecks = await Promise.all([
-    kvGet('openrouter_key'),
-    kvGet('github_models_key'),
-    kvGet('bytez_key'),
-    kvGet('poe_key'),
-    kvGet('groq_key'),
-    kvGet('gemini_key'),
-    kvGet('deepseek_key'),
-    kvGet('nvidia_key'),
-    kvGet('together_key'),
-    kvGet('fireworks_key'),
+    getProviderApiKey('openrouter'),
+    getProviderApiKey('githubmodels'),
+    getProviderApiKey('bytez'),
+    getProviderApiKey('poe'),
+    getProviderApiKey('groq'),
+    getProviderApiKey('gemini'),
+    getProviderApiKey('deepseek'),
+    getProviderApiKey('nvidia'),
+    getProviderApiKey('together'),
+    getProviderApiKey('fireworks'),
     kvGet('ollama_url'),
   ]);
 
@@ -242,7 +306,7 @@ async function withRetry<T>(
 }
 
 // Chat with AI (Puter native)
-export async function chat(
+export async function chatWithPuter(
   messages: AIMessage[] | string,
   optionsOrModel: string | {
     model?: string;
@@ -289,17 +353,68 @@ export async function chat(
       // Streaming response
       const response = await window.puter.ai.chat(messageArray, { model, stream: true });
       
-      let fullText = '';
-      for await (const chunk of response as AsyncIterable<{ text: string }>) {
-        fullText += chunk.text || '';
+      // BUG FIX #4: Add proper error handling for streaming
+      if (!response) {
+        throw new Error(`[streamChatFromPuter] Empty response from model ${model}`);
       }
+      
+      if (!isAsyncIterableResponse(response)) {
+        throw new Error(`[streamChatFromPuter] Response is not iterable. Expected async iterable, got ${typeof response}`);
+      }
+      
+      let fullText = '';
+      let chunkCount = 0;
+      
+      try {
+        for await (const chunk of response) {
+          if (!chunk) {
+            console.warn('[streamChatFromPuter] Received null/undefined chunk');
+            continue;
+          }
+          
+          if (typeof chunk !== 'object') {
+            console.warn(`[streamChatFromPuter] Received non-object chunk: ${typeof chunk}`);
+            continue;
+          }
+          
+          const text = typeof chunk.text === 'string' ? chunk.text : '';
+          if (typeof text !== 'string') {
+            console.warn(`[streamChatFromPuter] Chunk text is not string: ${typeof text}`);
+            continue;
+          }
+          
+          fullText += text;
+          chunkCount++;
+        }
+      } catch (streamError) {
+        if (fullText.length === 0) {
+          throw new Error(`[streamChatFromPuter] Stream failed before any content: ${streamError}`);
+        }
+        console.warn(`[streamChatFromPuter] Stream interrupted after ${chunkCount} chunks and ${fullText.length} chars:`, streamError);
+        // Return partial content if we got something
+      }
+      
+      if (fullText.length === 0) {
+        throw new Error(`[streamChatFromPuter] Stream produced no content (${chunkCount} chunks received)`);
+      }
+      
       return fullText;
     } else {
       // Non-streaming response
+      // BUG FIX #2: Add runtime validation for response structure
       const response = await window.puter.ai.chat(messageArray, { model });
-      return (response as { message: { content: string } }).message.content;
+      
+      if (!response || typeof response !== 'object') {
+        throw new Error(`[chatWithPuter] Invalid response type from model ${model}: expected object, got ${typeof response}`);
+      }
+      
+      if (!hasChatMessageResponse(response)) {
+        throw new Error(`[chatWithPuter] Invalid response structure from model ${model}: missing message object. Got keys: ${Object.keys(response).join(', ')}`);
+      }
+
+      return response.message.content;
     }
-  }, 3, `chat(${model})`);
+  }, 3, `chatWithPuter(${model})`);
 }
 
 // Chat with Gemini (custom key)
@@ -310,7 +425,7 @@ export async function chatWithGemini(
   const { brandKit = null, memoryContext } = options;
   
   // Get Gemini API key from storage
-  const apiKey = await kvGet('gemini_key');
+  const apiKey = await getProviderApiKey('gemini');
   if (!apiKey) {
     throw new Error('Gemini API key not configured');
   }
@@ -370,7 +485,7 @@ export async function chatWithGroq(
 ): Promise<string> {
   const { model = 'llama-3.3-70b-versatile', brandKit = null, memoryContext } = options;
   
-  const apiKey = await kvGet('groq_key');
+  const apiKey = await getProviderApiKey('groq');
   if (!apiKey) throw new Error('Groq API key not configured. Add it in Settings.');
   
   // Get memory context if not provided
@@ -409,7 +524,7 @@ export async function chatWithOpenRouter(
 ): Promise<string> {
   const { model = 'openrouter/auto', brandKit = null, memoryContext } = options;
   
-  const apiKey = await kvGet('openrouter_key');
+  const apiKey = await getProviderApiKey('openrouter');
   if (!apiKey) throw new Error('OpenRouter API key not configured. Add it in Settings.');
   
   // Get memory context if not provided
@@ -435,7 +550,7 @@ export async function chatWithGitHubModels(
   options: { model?: string; brandKit?: BrandKit | null; memoryContext?: string } = {}
 ): Promise<string> {
   const { model = 'openai/gpt-4o', brandKit = null, memoryContext } = options;
-  const apiKey = await kvGet('github_models_key');
+  const apiKey = await getProviderApiKey('githubmodels');
   if (!apiKey) throw new Error('GitHub Models API key not configured. Add it in Settings.');
   const memory = memoryContext ?? await buildMemoryContext();
   const messageArray = buildMessageArray(messages, brandKit, memory);
@@ -455,7 +570,7 @@ export async function chatWithBytez(
   options: { model?: string; brandKit?: BrandKit | null; memoryContext?: string } = {}
 ): Promise<string> {
   const { model = 'Qwen/Qwen3-4B', brandKit = null, memoryContext } = options;
-  const apiKey = await kvGet('bytez_key');
+  const apiKey = await getProviderApiKey('bytez');
   if (!apiKey) throw new Error('Bytez API key not configured. Add it in Settings.');
   const memory = memoryContext ?? await buildMemoryContext();
   const messageArray = buildMessageArray(messages, brandKit, memory);
@@ -475,7 +590,7 @@ export async function chatWithPoe(
   options: { model?: string; brandKit?: BrandKit | null; memoryContext?: string } = {}
 ): Promise<string> {
   const { model = 'Claude-Sonnet-4.6', brandKit = null, memoryContext } = options;
-  const apiKey = await kvGet('poe_key');
+  const apiKey = await getProviderApiKey('poe');
   if (!apiKey) throw new Error('Poe API key not configured. Add it in Settings.');
   const memory = memoryContext ?? await buildMemoryContext();
   const messageArray = buildMessageArray(messages, brandKit, memory);
@@ -497,7 +612,7 @@ export async function chatWithNvidia(
 ): Promise<string> {
   const { model = 'nvidia/llama-3.1-nemotron-70b-instruct', brandKit = null, memoryContext } = options;
   
-  const apiKey = await kvGet('nvidia_key');
+  const apiKey = await getProviderApiKey('nvidia');
   if (!apiKey) throw new Error('NVIDIA API key not configured. Add it in Settings.');
   
   // Get memory context if not provided
@@ -534,7 +649,7 @@ export async function chatWithTogether(
   options: { model?: string; brandKit?: BrandKit | null; memoryContext?: string } = {}
 ): Promise<string> {
   const { model = 'meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo', brandKit = null, memoryContext } = options;
-  const apiKey = await kvGet('together_key');
+  const apiKey = await getProviderApiKey('together');
   if (!apiKey) throw new Error('Together API key not configured. Add it in Settings.');
   const memory = memoryContext ?? await buildMemoryContext();
   const messageArray = buildMessageArray(messages, brandKit, memory);
@@ -554,7 +669,7 @@ export async function chatWithFireworks(
   options: { model?: string; brandKit?: BrandKit | null; memoryContext?: string } = {}
 ): Promise<string> {
   const { model = 'accounts/fireworks/models/llama-v3p1-70b-instruct', brandKit = null, memoryContext } = options;
-  const apiKey = await kvGet('fireworks_key');
+  const apiKey = await getProviderApiKey('fireworks');
   if (!apiKey) throw new Error('Fireworks API key not configured. Add it in Settings.');
   const memory = memoryContext ?? await buildMemoryContext();
   const messageArray = buildMessageArray(messages, brandKit, memory);
@@ -612,7 +727,7 @@ export async function chatWithDeepSeek(
 ): Promise<string> {
   const { model = 'deepseek-chat', brandKit = null, memoryContext } = options;
   
-  const apiKey = await kvGet('deepseek_key');
+  const apiKey = await getProviderApiKey('deepseek');
   if (!apiKey) throw new Error('DeepSeek API key not configured. Add it in Settings.');
   
   // Get memory context if not provided
@@ -682,6 +797,9 @@ export async function universalChat(
     try {
       const modelConfig = AVAILABLE_MODELS.find(m => m.model === candidateModel);
       const provider = modelConfig?.provider || 'puter';
+      if (isProviderInCooldown(provider)) {
+        continue;
+      }
 
       switch (provider) {
         case 'gemini':
@@ -707,11 +825,14 @@ export async function universalChat(
         case 'deepseek':
           return await chatWithDeepSeek(messages, { ...options, model: candidateModel });
         default:
-          return await chat(messages, { ...options, model: candidateModel });
+          return await chatWithPuter(messages, { ...options, model: candidateModel });
       }
     } catch (error) {
       lastError = error as Error;
       const errorMessage = getErrorText(error);
+      const failedModelConfig = AVAILABLE_MODELS.find((entry) => entry.model === candidateModel);
+      const failedProvider = (failedModelConfig?.provider || 'puter') as RoutedProvider;
+      applyProviderCooldown(failedProvider, errorMessage);
       if (isConfigurationError(errorMessage)) {
         console.warn(`universalChat skipped ${candidateModel}: ${errorMessage}`);
         continue;
@@ -725,6 +846,28 @@ export async function universalChat(
   }
 
   throw lastError || new Error('All AI model attempts failed');
+}
+
+// Primary chat entrypoint: use provider failover by default.
+// Keep native Puter streaming support when stream=true is explicitly requested.
+export async function chat(
+  messages: AIMessage[] | string,
+  optionsOrModel: string | {
+    model?: string;
+    brandKit?: BrandKit | null;
+    stream?: boolean;
+    memoryContext?: string;
+  } = {}
+): Promise<string> {
+  const options = typeof optionsOrModel === 'string'
+    ? { model: optionsOrModel }
+    : optionsOrModel;
+
+  if (options.stream) {
+    return chatWithPuter(messages, options);
+  }
+
+  return universalChat(messages, options);
 }
 
 // Generate image with DALL-E 3

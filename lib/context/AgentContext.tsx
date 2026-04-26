@@ -42,7 +42,7 @@ import type { VideoProvider } from '@/lib/services/videoGenerationService';
 import type { ImageProvider } from '@/lib/services/imageGenerationService';
 import { generateContent } from '@/lib/services/contentEngine';
 import type { Platform } from '@/lib/types';
-import { normalizeIncomingMessage, detectExplicitMediaIntent, buildFallbackChatMessages } from './agentBehavior.mjs';
+import { normalizeIncomingMessage, detectExplicitMediaIntent, buildFallbackChatMessages, isExplicitExecutionRequest } from './agentBehavior.mjs';
 import { ensureAgentSkillsInstalled, getEnabledAgentSkills, buildAgentSkillContext } from '@/lib/services/agentSkillService';
 
 const IMAGE_ENGINE_OPTIONS = [
@@ -405,6 +405,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const detectIntent = async (message: string, hasFiles: boolean): Promise<AgentIntent> => {
     const trimmedMessage = message.trim();
     const lowerMessage = trimmedMessage.toLowerCase();
+    const explicitExecutionRequested = isExplicitExecutionRequest(trimmedMessage);
     const explicitGenerationPattern = /\b(create content|make content|write (a|an)? ?post|write captions?|create posts?|turn this into content|use this pdf|make posts? from|create reels?|create shorts?|generate content|caption for|script for|turn this into posts?|create a caption|make a reel|make a video script)\b/;
     const softIdeaPattern = /\b(content idea|post idea)\b/;
     const nichePattern = /\b(niche|nich)\s*(is|:|=)\b/;
@@ -450,8 +451,13 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       const jsonMatch = response.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
+        const parsedIntent = parsed.intent || 'answer_question';
+        const shouldGateExecution =
+          !explicitExecutionRequested &&
+          ['generate_content', 'create_image', 'make_video'].includes(parsedIntent);
+
         return {
-          type: parsed.intent || 'answer_question',
+          type: shouldGateExecution ? 'answer_question' : parsedIntent,
           confidence: parsed.confidence || 0.7,
           params: parsed.params || {},
         };
@@ -582,6 +588,8 @@ ${decision.suggestions?.join('\n') || '- Improve quality and brand alignment'}
 Rules:
 - Keep it direct and human.
 - Remove robotic/generic phrasing.
+- Do not agree by default. If the idea is weak, say so clearly and explain why.
+- If rejecting a direction, give a stronger replacement the user can execute immediately.
 - Preserve the core answer.
 - Return only the improved response text.`;
 
@@ -603,7 +611,7 @@ Rules:
         if (decision.action === 'reject') {
           const forcedFallback = await universalChat(
             [
-              { role: 'system', content: 'Provide a concise, high-quality final response that is useful immediately.' },
+              { role: 'system', content: 'Provide a concise, natural-sounding final response. Be direct, non-robotic, and willing to challenge weak ideas with clear reasoning.' },
               { role: 'user', content: `Request: ${options.request || 'N/A'}\n\nDraft response: ${candidate}` },
             ],
             { model: state.currentModel, brandKit: options.brandKit || undefined }
@@ -1082,6 +1090,8 @@ Rules:
         userPrompt += '\n\nAcknowledge and save this as brand/niche memory. Confirm the locked niche briefly and naturally. Do not generate content unless the user explicitly asks for it.';
       } else if (intent.type === 'answer_question' && intent.params.hasIdeaContext) {
         userPrompt += '\n\nTreat this as setup context unless the user explicitly asks you to generate content. Respond naturally, confirm you have the idea/context, and ask one concise follow-up only if needed.';
+      } else if (intent.type === 'answer_question') {
+        userPrompt += '\n\nKeep this conversational and natural. Do not auto-generate posts, scripts, images, or videos unless the user explicitly requests execution.';
       }
 
       // Call AI

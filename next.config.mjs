@@ -24,7 +24,37 @@ const nextConfig = {
         headers: [
           {
             key: 'Content-Security-Policy',
-            value: "default-src 'self' https: 'unsafe-inline' 'unsafe-eval' blob: data:; script-src 'self' https: 'unsafe-inline' 'unsafe-eval' blob: https://js.puter.com; connect-src 'self' https: ws: wss: blob:; style-src 'self' https: 'unsafe-inline'; worker-src 'self' blob:;"
+            // BUG FIX #3: Harden CSP - remove unsafe-eval, restrict unsafe-inline
+            value: [
+              "default-src 'self'",
+              "script-src 'self' https://js.puter.com https://cdn.puter.com 'wasm-unsafe-eval'",
+              "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+              "font-src 'self' https://fonts.gstatic.com",
+              "img-src 'self' data: https:",
+              "media-src 'self' data: https:",
+              "connect-src 'self' https://js.puter.com https://api.puter.com https: ws: wss:",
+              "worker-src 'self' blob:",
+              "frame-ancestors 'none'",
+              "base-uri 'self'",
+              "form-action 'self'",
+              "upgrade-insecure-requests",
+            ].join('; ')
+          },
+          {
+            key: 'X-Content-Type-Options',
+            value: 'nosniff'
+          },
+          {
+            key: 'X-Frame-Options',
+            value: 'DENY'
+          },
+          {
+            key: 'X-XSS-Protection',
+            value: '1; mode=block'
+          },
+          {
+            key: 'Referrer-Policy',
+            value: 'strict-origin-when-cross-origin'
           }
         ]
       }

@@ -55,6 +55,8 @@ async function normalizeImageUrl(url: string): Promise<string> {
 // Retry configuration
 const MAX_RETRIES = 2;
 const RETRY_DELAY = 1000;
+const IMAGE_PROVIDER_COOLDOWN_MS = 5 * 60 * 1000;
+const imageProviderCooldownUntil = new Map<ImageProvider, number>();
 
 async function getProviderApiKey(provider: ImageProvider): Promise<string | null> {
   const keyAliases: Record<ImageProvider, string[]> = {
@@ -167,6 +169,57 @@ function buildNegativePrompt(options: ImageGenerationOptions): string {
 
 function isPremiumImageProvider(provider: ImageProvider): boolean {
   return provider === 'stability' || provider === 'leonardo' || provider === 'ideogram';
+}
+
+function isQuotaOrBillingError(message: string): boolean {
+  const text = message.toLowerCase();
+  return (
+    text.includes('quota') ||
+    text.includes('out of credits') ||
+    text.includes('insufficient credit') ||
+    text.includes('insufficient balance') ||
+    text.includes('billing') ||
+    text.includes('payment required') ||
+    text.includes('402') ||
+    text.includes('credit balance') ||
+    text.includes('usage limit') ||
+    text.includes('insufficient_quota')
+  );
+}
+
+function isProviderInCooldown(provider: ImageProvider): boolean {
+  const until = imageProviderCooldownUntil.get(provider);
+  if (!until) return false;
+  if (Date.now() > until) {
+    imageProviderCooldownUntil.delete(provider);
+    return false;
+  }
+  return true;
+}
+
+function applyProviderCooldown(provider: ImageProvider, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (!isQuotaOrBillingError(message)) return;
+  imageProviderCooldownUntil.set(provider, Date.now() + IMAGE_PROVIDER_COOLDOWN_MS);
+}
+
+async function getOrderedAvailableProviders(preferred?: ImageProvider): Promise<ImageProvider[]> {
+  const [stability, leonardo, ideogram, puter] = await Promise.all([
+    getProviderApiKey('stability'),
+    getProviderApiKey('leonardo'),
+    getProviderApiKey('ideogram'),
+    canUsePuter(),
+  ]);
+
+  const available: ImageProvider[] = [];
+  if (stability && !isProviderInCooldown('stability')) available.push('stability');
+  if (leonardo && !isProviderInCooldown('leonardo')) available.push('leonardo');
+  if (ideogram && !isProviderInCooldown('ideogram')) available.push('ideogram');
+  if (puter && !isProviderInCooldown('puter')) available.push('puter');
+
+  if (!preferred) return available;
+  if (!available.includes(preferred)) return available;
+  return [preferred, ...available.filter((provider) => provider !== preferred)];
 }
 
 // Helper for retrying failed requests
@@ -454,50 +507,17 @@ export async function generateImage(options: ImageGenerationOptions): Promise<Ge
     leonardo: () => generateWithLeonardo(cleanOptions),
     ideogram: () => generateWithIdeogram(cleanOptions),
   };
+  const providerAttempts = await getOrderedAvailableProviders(provider);
+  const filteredProviders = qualityTier === 'netflix'
+    ? providerAttempts.filter(isPremiumImageProvider)
+    : providerAttempts;
 
-  // If provider specified, use only that provider.
-  if (provider) {
-    if (!providerMap[provider]) {
-      throw new Error(`Unsupported image provider: ${provider}`);
-    }
-    if (qualityTier === 'netflix' && !isPremiumImageProvider(provider)) {
-      throw new Error('Netflix-grade image mode requires Stability, Leonardo, or Ideogram. Puter is not allowed for that quality tier.');
-    }
-    return providerMap[provider]();
-  }
-
-  // Auto-select best available configured provider with real fallback.
-  const providerAttempts: Array<{ check: () => Promise<boolean>; generate: () => Promise<GeneratedImage> }> = [
-    { 
-      check: async () => !!(await getProviderApiKey('stability')), 
-      generate: () => generateWithStability(cleanOptions) 
-    },
-    { 
-      check: async () => !!(await getProviderApiKey('leonardo')), 
-      generate: () => generateWithLeonardo(cleanOptions) 
-    },
-    { 
-      check: async () => !!(await getProviderApiKey('ideogram')), 
-      generate: () => generateWithIdeogram(cleanOptions) 
-    },
-    { 
-      check: async () => canUsePuter(),
-      generate: () => generateWithPuter(cleanOptions) 
-    },
-  ];
-
-  if (qualityTier === 'netflix') {
-    providerAttempts.pop();
-  }
-
-  for (const attempt of providerAttempts) {
+  for (const candidate of filteredProviders) {
     try {
-      if (await attempt.check()) {
-        return await attempt.generate();
-      }
+      return await providerMap[candidate]();
     } catch (error) {
-      console.warn('Provider attempt failed, trying next:', error);
-      continue;
+      applyProviderCooldown(candidate, error);
+      console.warn(`Image provider ${candidate} failed, trying next`, error);
     }
   }
 
