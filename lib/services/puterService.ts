@@ -214,14 +214,11 @@ export async function signIn(): Promise<{ username: string } | null> {
       throw new Error('Window not available');
     }
 
-    const ready = await waitForPuter();
-    if (!ready || !window.puter) {
+    if (!window.puter) {
       throw new Error('Puter not available');
     }
 
-    const authAction = typeof window.puter.ui?.authenticateWithPuter === 'function'
-      ? () => window.puter.ui.authenticateWithPuter!()
-      : () => window.puter.auth.signIn();
+    const authAction = () => window.puter.auth.signIn({ attempt_temp_user_creation: true });
 
     let authError: unknown = null;
     const authAttempt = Promise.resolve()

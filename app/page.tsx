@@ -14,7 +14,7 @@ function LandingContent() {
   const [hasRedirected, setHasRedirected] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [nextPath, setNextPath] = useState<string | null>(null);
-  const [shouldAutoReauth, setShouldAutoReauth] = useState(false);
+  const [needsManualReauth, setNeedsManualReauth] = useState(false);
   const [puterReady, setPuterReady] = useState(false);
   const [authDiagnostics, setAuthDiagnostics] = useState<PuterAuthDiagnostics | null>(null);
 
@@ -29,7 +29,7 @@ function LandingContent() {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
     setNextPath(params.get('next'));
-    setShouldAutoReauth(params.get('reauth') === '1');
+    setNeedsManualReauth(params.get('reauth') === '1');
   }, []);
 
   useEffect(() => {
@@ -72,7 +72,7 @@ function LandingContent() {
         setPuterReady(ready);
         if (!ready) {
           await refreshDiagnostics();
-          setAuthError('Puter failed to load. Check your connection and retry.');
+          setAuthError('Puter is still loading. Wait a moment and tap again.');
           return;
         }
       }
@@ -88,12 +88,7 @@ function LandingContent() {
     } finally {
       setIsSigningIn(false);
     }
-  }, [isSigningIn, login, puterReady, nextPath, onboardingComplete, router, refreshDiagnostics]);
-
-  useEffect(() => {
-    if (!shouldAutoReauth || isAuthenticated || hasRedirected || isSigningIn) return;
-    void handleSignIn();
-  }, [shouldAutoReauth, isAuthenticated, hasRedirected, isSigningIn, handleSignIn]);
+  }, [isSigningIn, login, puterReady, nextPath, onboardingComplete, refreshDiagnostics]);
 
   // Don't show loading screen - page loads instantly
   // Auth check happens in background
@@ -134,6 +129,11 @@ function LandingContent() {
             <p className="text-sm text-muted-foreground">
               Free to use - pay only for AI credits
             </p>
+            {needsManualReauth && !authError && (
+              <p className="text-sm text-muted-foreground max-w-md">
+                Your session needs to be reconnected. Tap the button to authorize Puter.
+              </p>
+            )}
             {authError && (
               <p className="text-sm text-destructive max-w-md">
                 {authError}
