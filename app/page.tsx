@@ -75,7 +75,7 @@ function LandingContent() {
     setIsSigningIn(true);
     setAuthError(null);
     try {
-      if (!puterReady) {
+      if (typeof window !== 'undefined' && !window.puter && !puterReady) {
         const ready = await waitForPuter();
         await refreshDiagnostics();
         if (!ready) {

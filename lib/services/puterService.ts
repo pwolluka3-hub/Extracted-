@@ -215,17 +215,25 @@ export async function signIn(): Promise<{ username: string } | null> {
       throw new Error('Window not available');
     }
 
-    const ready = await waitForPuter();
-    if (!ready || !window.puter) {
-      throw new Error('Puter not available');
+    if (!window.puter) {
+      const ready = await waitForPuter();
+      if (!ready || !window.puter) {
+        throw new Error('Puter not available');
+      }
     }
 
     let resolvedUser: { username: string } | null = null;
     const authAction = async () => {
-      const maybeUser = await window.puter.auth.signIn();
-      if (maybeUser?.username) {
-        resolvedUser = maybeUser;
-        return;
+      try {
+        const maybeUser = await window.puter.auth.signIn();
+        if (maybeUser?.username) {
+          resolvedUser = maybeUser;
+          return;
+        }
+      } catch (primaryError) {
+        if (typeof window.puter.ui?.authenticateWithPuter !== 'function') {
+          throw primaryError;
+        }
       }
 
       if (typeof window.puter.ui?.authenticateWithPuter === 'function') {
