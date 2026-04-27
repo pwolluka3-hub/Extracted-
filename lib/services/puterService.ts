@@ -222,14 +222,14 @@ export async function signIn(): Promise<{ username: string } | null> {
 
     let resolvedUser: { username: string } | null = null;
     const authAction = async () => {
-      if (typeof window.puter.ui?.authenticateWithPuter === 'function') {
-        await window.puter.ui.authenticateWithPuter();
-        return;
-      }
-
       const maybeUser = await window.puter.auth.signIn();
       if (maybeUser?.username) {
         resolvedUser = maybeUser;
+        return;
+      }
+
+      if (typeof window.puter.ui?.authenticateWithPuter === 'function') {
+        await window.puter.ui.authenticateWithPuter();
       }
     };
 

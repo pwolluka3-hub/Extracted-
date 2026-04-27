@@ -95,12 +95,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const user = await signIn();
 
       if (user) {
-        await initMemory();
+        await initMemory().catch((error) => {
+          console.error('Init memory after login failed:', error);
+        });
 
-        const [onboarding, brandKit] = await Promise.all([
-          isOnboardingComplete().catch(() => false),
-          loadBrandKit().catch(() => null),
-        ]);
+        const onboarding = await isOnboardingComplete().catch(() => false);
+        const brandKit = await loadBrandKit().catch(() => null);
 
         setState({
           isLoading: false,
