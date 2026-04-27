@@ -34,9 +34,17 @@ function LandingContent() {
 
   useEffect(() => {
     let active = true;
-    void refreshDiagnostics().then(() => {
+
+    void (async () => {
+      await refreshDiagnostics();
+      const ready = await waitForPuter();
       if (!active) return;
-    });
+
+      if (ready) {
+        await refreshDiagnostics();
+      }
+    })();
+
     return () => {
       active = false;
     };
@@ -68,13 +76,9 @@ function LandingContent() {
     setAuthError(null);
     try {
       if (!puterReady) {
-        const ready = await waitForPuter();
-        setPuterReady(ready);
-        if (!ready) {
-          await refreshDiagnostics();
-          setAuthError('Puter is still loading. Wait a moment and tap again.');
-          return;
-        }
+        await refreshDiagnostics();
+        setAuthError('Puter is still loading. Wait for the button to switch to Get Started with Puter.');
+        return;
       }
 
       const success = await login();
@@ -121,14 +125,20 @@ function LandingContent() {
             <NeonButton
               onClick={handleSignIn}
               loading={isSigningIn}
+              disabled={!puterReady}
               size="lg"
               className="px-10"
             >
-              {isSigningIn ? 'Signing In...' : !puterReady ? 'Connect Puter' : 'Get Started with Puter'}
+              {isSigningIn ? 'Signing In...' : !puterReady ? 'Loading Puter...' : 'Get Started with Puter'}
             </NeonButton>
             <p className="text-sm text-muted-foreground">
               Free to use - pay only for AI credits
             </p>
+            {!puterReady && !authError && (
+              <p className="text-sm text-muted-foreground max-w-md">
+                Puter is still initializing in this browser session. The sign-in button will unlock automatically when it is ready.
+              </p>
+            )}
             {needsManualReauth && !authError && (
               <p className="text-sm text-muted-foreground max-w-md">
                 Your session needs to be reconnected. Tap the button to authorize Puter.

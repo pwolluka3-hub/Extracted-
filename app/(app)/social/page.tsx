@@ -51,6 +51,7 @@ export default function SocialHubPage() {
   const [ayrshareKey, setAyrshareKey] = useState('');
   const [isCheckingConnections, setIsCheckingConnections] = useState(false);
   const [showKeyInput, setShowKeyInput] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
 
   useEffect(() => {
     loadConnections();
@@ -58,6 +59,7 @@ export default function SocialHubPage() {
 
   const loadConnections = async () => {
     setIsCheckingConnections(true);
+    setConnectionError(null);
     
     // Initialize all platforms as disconnected
     const initialConnections: PlatformConnection[] = PLATFORM_LIST.map(p => ({
@@ -85,15 +87,20 @@ export default function SocialHubPage() {
         });
         setConnections(updatedConnections);
       } catch (error) {
+        const message = error instanceof Error
+          ? error.message
+          : 'Failed to check connection status.';
+        setConnectionError(message);
         setConnections(
           initialConnections.map(conn => ({
             ...conn,
             status: 'error' as ConnectionStatus,
-            error: 'Failed to check connection status',
+            error: message,
           }))
         );
       }
     } else {
+      setConnectionError(null);
       setConnections(
         initialConnections.map(conn => ({
           ...conn,
@@ -110,6 +117,7 @@ export default function SocialHubPage() {
     
     await kvSet('ayrshare_key', key);
     setAyrshareKey('••••••••' + key.slice(-4));
+    setConnectionError(null);
     setShowKeyInput(false);
     await loadConnections();
   };
@@ -117,6 +125,7 @@ export default function SocialHubPage() {
   const handleRemoveAyrshareKey = async () => {
     await kvDelete('ayrshare_key');
     setAyrshareKey('');
+    setConnectionError(null);
     setConnections(
       connections.map(conn => ({
         ...conn,
@@ -186,7 +195,7 @@ export default function SocialHubPage() {
             </div>
             <div>
               <p className="text-2xl font-bold text-foreground">
-                {ayrshareKey ? 'Active' : 'Inactive'}
+                {connectionError ? 'Error' : ayrshareKey ? 'Active' : 'Inactive'}
               </p>
               <p className="text-sm text-muted-foreground">Ayrshare Status</p>
             </div>
@@ -212,6 +221,12 @@ export default function SocialHubPage() {
             Get API Key
           </NeonButton>
         </div>
+
+        {connectionError && (
+          <div className="mb-6 rounded-xl border border-nexus-error/30 bg-nexus-error/10 px-4 py-3 text-sm text-nexus-error">
+            Ayrshare verification failed: {connectionError}
+          </div>
+        )}
 
         {showKeyInput ? (
           <div className="space-y-4">

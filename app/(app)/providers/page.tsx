@@ -62,7 +62,7 @@ export default function ProvidersPage() {
       statuses.push({
         provider,
         hasKey,
-        isConnected: hasKey,
+        isConnected: false,
         lastTested: null,
         error: null,
       });
@@ -103,7 +103,7 @@ export default function ProvidersPage() {
 
     try {
       const testModel = provider.models[0];
-      const response = await callCustomProvider(providerId, testModel, [
+      await callCustomProvider(providerId, testModel, [
         { role: 'user', content: 'Say "Hello from NexusAI!" in exactly those words.' }
       ]);
 
@@ -174,7 +174,7 @@ export default function ProvidersPage() {
                     status={status.isConnected ? 'success' : status.hasKey ? 'warning' : 'default'}
                     size="sm"
                   >
-                    {status.isConnected ? 'Connected' : status.hasKey ? 'Not Tested' : 'Not Configured'}
+                    {status.isConnected ? 'Connected' : status.hasKey ? 'Configured' : 'Not Configured'}
                   </StatusBadge>
                 </div>
                 <p className="text-sm text-foreground/60">
@@ -279,10 +279,19 @@ export default function ProvidersPage() {
                         )}
                       </span>
                     )}
+                    {!status.lastTested && status.hasKey && (
+                      <span>Key saved. Run a live test to verify connectivity.</span>
+                    )}
+                    {!status.provider.requiresKey && !status.lastTested && (
+                      <span>Built-in provider. Run a live test to verify runtime availability.</span>
+                    )}
                   </div>
                   <NeonButton
                     onClick={() => testProvider(status.provider.id)}
-                    disabled={!status.hasKey || testingProvider === status.provider.id}
+                    disabled={
+                      testingProvider === status.provider.id ||
+                      (status.provider.requiresKey && !status.hasKey)
+                    }
                     variant="secondary"
                     size="sm"
                   >
@@ -398,7 +407,7 @@ function MusicAPIKeyCard({
           <p className="text-sm text-foreground/60">{description}</p>
         </div>
         <StatusBadge status={hasKey ? 'success' : 'default'} size="sm">
-          {hasKey ? 'Connected' : 'Not Set'}
+          {hasKey ? 'Configured' : 'Not Set'}
         </StatusBadge>
       </div>
 

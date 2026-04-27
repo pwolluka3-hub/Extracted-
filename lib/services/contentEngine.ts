@@ -7,7 +7,7 @@ import { PLATFORMS } from '@/lib/constants/platforms';
 import { learningSystem } from '@/lib/core/LearningSystem';
 import { getLiveTrendContext } from './trendingService';
 import { generatePlatformCopyPackage, type PlatformCopyPackage } from './hashtagService';
-import { generateOfflineContent, isOfflineMode } from './offlineGenerationService';
+import { isOfflineMode } from './offlineGenerationService';
 import {
   trackGenerationFailure,
   trackGenerationStart,
@@ -57,6 +57,10 @@ export async function generateContent(
   const model = await getCurrentModel();
   const adaptiveStrategy = await learningSystem.getAdaptiveContentStrategy(platforms[0]);
   const offline = isOfflineMode();
+  if (offline) {
+    throw new Error('Live content generation is unavailable while offline. Reconnect to generate real content.');
+  }
+
   const lockedNiche = agentMemory.niche || brand?.niche || '';
   const lockedAudience = agentMemory.targetAudience || brand?.targetAudience || '';
   const lockedTone = agentMemory.preferredTone || brand?.tone || '';
@@ -72,10 +76,6 @@ Monetization direction: ${lockedMonetization.length > 0 ? lockedMonetization.joi
 Recent saved ideas: ${recentIdeas.length > 0 ? recentIdeas.join(' | ') : 'None saved yet'}`
     : '';
   const liveTrendContext = !offline && lockedNiche ? await getLiveTrendContext(lockedNiche, platforms[0]) : null;
-
-  if (offline) {
-    return generateOfflineContent(options, brand);
-  }
 
   const prompt = `Generate engaging ${format} content for social media.
 
@@ -126,8 +126,10 @@ Format your response as JSON:
   try {
     response = await universalChat(prompt, { model, brandKit: brand });
   } catch (error) {
-    console.warn('Primary content generation failed, using offline fallback', error);
-    return generateOfflineContent(options, brand);
+    console.warn('Primary content generation failed', error);
+    throw error instanceof Error
+      ? error
+      : new Error('Live content generation failed before a valid result was returned.');
   }
   
   // Parse JSON response
@@ -357,13 +359,7 @@ export async function getContentSuggestions(count = 5): Promise<string[]> {
   const recentTopics = await getRecentTopics(10);
 
   if (!brandKit) {
-    return [
-      'Share a behind-the-scenes look at your work',
-      'Post a tip or trick your audience would find valuable',
-      'Ask your audience a question to boost engagement',
-      'Share a success story or milestone',
-      'Create content around a trending topic in your niche',
-    ];
+    return [];
   }
 
   const prompt = `Generate ${count} specific content ideas for a ${brandKit.niche} brand.

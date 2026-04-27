@@ -71,9 +71,7 @@ function deriveAnalyticsFromPublishedContent(drafts: ContentDraft[]): Partial<An
 
   const postingTimes: Record<string, number> = {};
   const hashtagCounts = new Map<string, number>();
-  const platformScores = new Map<Platform, { total: number; count: number }>();
-  const followerGrowthByDate = new Map<string, number>();
-  const topContent: Array<{ id: string; engagement: number; platform: string }> = [];
+  const platformPublishCounts = new Map<Platform, number>();
 
   for (const draft of drafts) {
     const timestamp = draft.publishedAt || draft.updated || draft.created;
@@ -81,57 +79,30 @@ function deriveAnalyticsFromPublishedContent(drafts: ContentDraft[]): Partial<An
     const hourKey = `${publishedDate.getHours().toString().padStart(2, '0')}:00`;
     postingTimes[hourKey] = (postingTimes[hourKey] || 0) + 1;
 
-    const dayKey = publishedDate.toISOString().slice(0, 10);
-    followerGrowthByDate.set(dayKey, (followerGrowthByDate.get(dayKey) || 0) + 1);
-
     const text = getLatestDraftText(draft);
     const hashtags = extractHashtags(text);
     for (const hashtag of hashtags) {
       hashtagCounts.set(hashtag, (hashtagCounts.get(hashtag) || 0) + 1);
     }
 
-    const engagementScore = Math.max(
-      draft.platforms.length * 20
-      + hashtags.length * 8
-      + Math.min(text.length, 280) / 10,
-      1
-    );
-
     for (const platform of draft.platforms) {
-      const score = platformScores.get(platform) || { total: 0, count: 0 };
-      score.total += engagementScore;
-      score.count += 1;
-      platformScores.set(platform, score);
-      topContent.push({
-        id: `${draft.id}:${platform}`,
-        engagement: Math.round(engagementScore),
-        platform,
-      });
+      platformPublishCounts.set(platform, (platformPublishCounts.get(platform) || 0) + 1);
     }
   }
-
-  const engagementRates = Object.fromEntries(
-    Array.from(platformScores.entries()).map(([platform, score]) => [
-      platform,
-      Number((score.total / score.count / 20).toFixed(1)),
-    ])
-  );
-
-  const followerGrowth = Array.from(followerGrowthByDate.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, count]) => ({ date, count }));
 
   const topHashtags = Array.from(hashtagCounts.entries())
     .sort((a, b) => b[1] - a[1])
     .slice(0, 10)
     .map(([tag, uses]) => ({ tag, uses }));
 
+  const pillarPerformance = Object.fromEntries(
+    Array.from(platformPublishCounts.entries()).map(([platform, count]) => [platform, count])
+  );
+
   return {
-    engagementRates,
     postingTimes,
-    followerGrowth,
     topHashtags,
-    topContent: topContent.sort((a, b) => b.engagement - a.engagement).slice(0, 10),
+    pillarPerformance,
   };
 }
 
@@ -160,17 +131,23 @@ class AnalyticsService {
   async generateInsights(analyticsData: AnalyticsData, brandContext: any): Promise<string> {
     try {
       const prompt = `
-        Based on this social media performance data, provide 2-3 key insights and recommendations.
+        Based on this social media publishing activity, provide 2-3 practical insights and recommendations.
         Keep it under 100 words.
 
-        Engagement Rates: ${JSON.stringify(analyticsData.engagementRates)}
-        Best performing times: ${Object.entries(analyticsData.postingTimes)
+        Posting activity by time: ${Object.entries(analyticsData.postingTimes)
           .sort(([, a], [, b]) => b - a)
           .slice(0, 3)
-          .map(([time]) => time)
+          .map(([time, count]) => `${time} (${count})`)
           .join(', ')}
+        Most-used hashtags: ${analyticsData.topHashtags
+          .slice(0, 5)
+          .map((entry) => `#${entry.tag} (${entry.uses})`)
+          .join(', ')}
+        Publish counts by platform: ${JSON.stringify(analyticsData.pillarPerformance)}
         Brand: ${brandContext.brandName}
 
+        Only talk about publishing cadence, topic repetition, and hashtag usage.
+        Do not imply this data includes real engagement, reach, clicks, or follower growth.
         Focus on actionable insights the user can apply immediately.
       `;
 

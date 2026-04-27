@@ -259,6 +259,14 @@ export async function getConnectedPlatforms(): Promise<{
   platforms: Platform[];
   details: Record<Platform, { connected: boolean; username?: string }>;
 }> {
+  const key = await getAyrshareKey();
+  if (!key) {
+    return {
+      platforms: [],
+      details: createEmptyPlatformDetails(),
+    };
+  }
+
   try {
     const result = await ayrshareRequest<AyrshareUserResponse>('/user');
     const extracted = extractConnectedPlatforms(result);
@@ -269,12 +277,10 @@ export async function getConnectedPlatforms(): Promise<{
 
     const profilesResult = await ayrshareRequest<AyrshareUserResponse>('/profiles');
     return extractConnectedPlatforms(profilesResult);
-  } catch {
-    // Return empty if not configured
-    return {
-      platforms: [],
-      details: createEmptyPlatformDetails(),
-    };
+  } catch (error) {
+    throw error instanceof Error
+      ? error
+      : new Error('Unable to verify connected social platforms.');
   }
 }
 

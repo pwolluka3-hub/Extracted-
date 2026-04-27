@@ -44,7 +44,7 @@ export default function AnalyticsPage() {
         {/* Header */}
         <div className="mb-12">
           <h1 className="text-4xl font-bold text-white mb-2">Analytics</h1>
-          <p className="text-gray-400">Performance insights and AI recommendations</p>
+          <p className="text-gray-400">Publishing activity insights and AI recommendations</p>
         </div>
 
         {loading ? (
@@ -59,15 +59,16 @@ export default function AnalyticsPage() {
               </GlassCard>
             )}
 
-            {/* Engagement Rates */}
-            {analytics?.engagementRates && Object.keys(analytics.engagementRates).length > 0 && (
+            {/* Platform Publish Counts */}
+            {analytics?.pillarPerformance && Object.keys(analytics.pillarPerformance).length > 0 && (
               <GlassCard className="p-8">
-                <h2 className="text-2xl font-bold text-violet mb-6">Engagement by Platform</h2>
+                <h2 className="text-2xl font-bold text-violet mb-6">Published by Platform</h2>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {Object.entries(analytics.engagementRates as Record<string, number>).map(([platform, rate]) => (
+                  {Object.entries(analytics.pillarPerformance as Record<string, number>).map(([platform, count]) => (
                     <div key={platform} className="p-4 bg-bg-glass rounded-lg border border-border">
                       <p className="text-gray-400 text-sm capitalize mb-2">{platform}</p>
-                      <p className="text-3xl font-bold text-cyan">{(rate as number).toFixed(1)}%</p>
+                      <p className="text-3xl font-bold text-cyan">{count as number}</p>
+                      <p className="text-xs text-gray-500">published items</p>
                     </div>
                   ))}
                 </div>
@@ -93,11 +94,26 @@ export default function AnalyticsPage() {
               </GlassCard>
             )}
 
+            {/* Top Hashtags */}
+            {analytics?.topHashtags && analytics.topHashtags.length > 0 && (
+              <GlassCard className="p-8">
+                <h2 className="text-2xl font-bold text-cyan mb-6">Most Used Hashtags</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {analytics.topHashtags.slice(0, 8).map((entry: { tag: string; uses: number }) => (
+                    <div key={entry.tag} className="p-4 bg-bg-glass rounded-lg border border-border flex items-center justify-between gap-4">
+                      <p className="text-gray-300">#{entry.tag}</p>
+                      <p className="text-sm text-gray-500">{entry.uses} uses</p>
+                    </div>
+                  ))}
+                </div>
+              </GlassCard>
+            )}
+
             {/* Empty analytics state */}
             {!analytics || Object.keys(analytics).every(k => !analytics[k] || (Array.isArray(analytics[k]) && analytics[k].length === 0) || (typeof analytics[k] === 'object' && Object.keys(analytics[k]).length === 0)) && (
               <GlassCard className="p-8 text-center">
-                <p className="text-gray-400 mb-4">No analytics data yet. Start posting to see your performance metrics.</p>
-                <p className="text-sm text-gray-500">Connect your Ayrshare account in Settings to sync platform analytics.</p>
+                <p className="text-gray-400 mb-4">No publishing activity yet. Start posting to build your activity history.</p>
+                <p className="text-sm text-gray-500">This view only shows activity the app can verify from saved publishing records.</p>
               </GlassCard>
             )}
           </div>

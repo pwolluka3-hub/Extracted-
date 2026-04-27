@@ -17,7 +17,6 @@ import { memoryManager } from './MemoryManager';
 import { loadAgentMemory, markIdeaUsed, type ContentIdea } from '../services/agentMemoryService';
 import { learningSystem } from './LearningSystem';
 import type { Platform } from '@/lib/types';
-import { generateContent } from '../services/contentEngine';
 import {
   trackGenerationFailure,
   trackGenerationStart,
@@ -319,40 +318,10 @@ export class AutomationEngine {
         return;
       }
 
-      // Execute via NexusCore or local offline fallback
+      // Execute via NexusCore only. Automation should fail clearly when live providers are unavailable.
       let result: NexusResult;
       if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-        const platform = (request.platform as Platform) || 'twitter';
-        const offlineContent = await generateContent({
-          idea: request.userInput,
-          platforms: [platform],
-          customInstructions: request.customInstructions,
-          includeImage: false,
-        });
-
-        result = {
-          success: true,
-          output: offlineContent.text,
-          score: 72,
-          allOutputs: [],
-          selectedAgent: 'offline-local',
-          provider: 'offline-local',
-          governorValidation: {
-            approved: true,
-            score: 72,
-            issues: [],
-            feedback: 'Approved via offline fallback mode.',
-          },
-          memoryContext: await memoryManager.buildContext(request.userInput),
-          metadata: {
-            totalDuration: 0,
-            agentsSpawned: 0,
-            agentsSucceeded: 1,
-            providersAttempted: ['offline-local'],
-            regenerations: 0,
-            learningUpdated: false,
-          },
-        };
+        throw new Error('Automation requires a live network connection and real providers. Reconnect before running automation.');
       } else {
         result = await nexusCore.execute(request);
       }

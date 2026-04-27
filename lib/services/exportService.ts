@@ -17,7 +17,7 @@ export interface ReportSummary {
   avgEngagementRate: number;
   totalReach: number;
   followerGrowth: number;
-  bestPerformingPlatform: Platform;
+  bestPerformingPlatform: Platform | null;
 }
 
 export interface PlatformReport {
@@ -61,7 +61,7 @@ export function generateCSV(data: ReportData): string {
   lines.push(`"Avg Engagement Rate","${data.summary.avgEngagementRate.toFixed(2)}%"`);
   lines.push(`"Total Reach",${data.summary.totalReach}`);
   lines.push(`"Follower Growth","${data.summary.followerGrowth >= 0 ? '+' : ''}${data.summary.followerGrowth}"`);
-  lines.push(`"Best Platform","${data.summary.bestPerformingPlatform}"`);
+  lines.push(`"Best Platform","${data.summary.bestPerformingPlatform || 'N/A'}"`);
   lines.push('');
   
   // Platform breakdown
@@ -159,7 +159,7 @@ export function generateHTML(data: ReportData): string {
       </div>
       <div class="card">
         <div class="label">Best Platform</div>
-        <div class="value" style="text-transform: capitalize;">${data.summary.bestPerformingPlatform}</div>
+        <div class="value" style="text-transform: capitalize;">${data.summary.bestPerformingPlatform || 'N/A'}</div>
       </div>
     </div>
   </div>
@@ -276,13 +276,13 @@ export function exportPDF(data: ReportData): void {
   }
 }
 
-// Generate an empty report scaffold until live analytics are available
+// Generate an empty report scaffold until real reporting inputs are available
 export function generateEmptyReport(): ReportData {
   const now = new Date();
   const start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
   return {
-    title: 'Social Media Performance Report',
+    title: 'Social Media Activity Report',
     dateRange: {
       start: start.toLocaleDateString(),
       end: now.toLocaleDateString(),
@@ -293,7 +293,7 @@ export function generateEmptyReport(): ReportData {
       avgEngagementRate: 0,
       totalReach: 0,
       followerGrowth: 0,
-      bestPerformingPlatform: 'instagram',
+      bestPerformingPlatform: null,
     },
     platforms: [],
     topContent: [],

@@ -19,7 +19,7 @@ export function NotificationBootstrap() {
     const handleOffline = () => {
       void notificationService.notifySystemStatus(
         'offline',
-        'Offline mode is active. Cached workspace, saved drafts, voice controls, and local generation fallback are still available.'
+        'Offline mode is active. Cached workspace, saved drafts, and local controls remain available, but live generation and publishing are paused.'
       );
     };
 
