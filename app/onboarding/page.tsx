@@ -50,11 +50,27 @@ const MODEL_OPTIONS = [
   { id: 'claude-sonnet-4-5', name: 'Claude Sonnet', description: 'Great for creative content' },
 ];
 
+function readOnboardingSearchState() {
+  if (typeof window === 'undefined') {
+    return {
+      nextPath: '/onboarding',
+      connectRequested: false,
+      guestRouteRequested: false,
+    };
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  return {
+    nextPath: params.get('next') || '/onboarding',
+    connectRequested: params.get('connect') === '1',
+    guestRouteRequested: params.get('guest') === '1',
+  };
+}
+
 function OnboardingContent() {
   const router = useRouter();
   const { isLoading, isAuthenticated, isGuest, onboardingComplete, login, refreshBrandKit, setOnboardingComplete: setAuthOnboardingComplete } = useAuth();
-  const [nextPath, setNextPath] = useState('/onboarding');
-  const [connectRequested, setConnectRequested] = useState(false);
+  const [routeState, setRouteState] = useState(readOnboardingSearchState);
   const [isConnectingPuter, setIsConnectingPuter] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
   
@@ -79,6 +95,7 @@ function OnboardingContent() {
   const [ayrshareKey, setAyrshareKey] = useState('');
   const [selectedModel, setSelectedModel] = useState('gpt-4o');
   const [contentPillar, setContentPillar] = useState('');
+  const canUseGuestFlow = isGuest || routeState.guestRouteRequested;
 
   // Redirect if already onboarded
   useEffect(() => {
@@ -89,18 +106,15 @@ function OnboardingContent() {
 
   // Redirect to login if not authenticated
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const params = new URLSearchParams(window.location.search);
-    setNextPath(params.get('next') || '/onboarding');
-    setConnectRequested(params.get('connect') === '1');
+    setRouteState(readOnboardingSearchState());
   }, []);
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated && !isGuest) {
-      const nextTarget = encodeURIComponent(nextPath);
+    if (!isLoading && !isAuthenticated && !canUseGuestFlow) {
+      const nextTarget = encodeURIComponent(routeState.nextPath);
       router.push(`/?reauth=1&next=${nextTarget}`);
     }
-  }, [isLoading, isAuthenticated, isGuest, nextPath, router]);
+  }, [canUseGuestFlow, isAuthenticated, isLoading, routeState.nextPath, router]);
 
   const handleConnectPuter = async () => {
     if (isConnectingPuter) return;
@@ -111,8 +125,12 @@ function OnboardingContent() {
     try {
       const success = await login();
       if (success) {
-        setConnectRequested(false);
-        router.replace(nextPath || '/onboarding');
+        setRouteState((current) => ({
+          ...current,
+          connectRequested: false,
+          guestRouteRequested: false,
+        }));
+        router.replace(routeState.nextPath || '/onboarding');
       }
     } catch (error) {
       setConnectError(error instanceof Error ? error.message : 'Puter sign-in failed.');
@@ -195,11 +213,11 @@ function OnboardingContent() {
     }
   };
 
-  if (isLoading) {
+  if (isLoading && !routeState.guestRouteRequested) {
     return <FullPageLoading text="Loading..." />;
   }
 
-  if (!isAuthenticated && !isGuest) {
+  if (!isAuthenticated && !canUseGuestFlow) {
     return <FullPageLoading text="Redirecting to login..." />;
   }
 
@@ -270,7 +288,7 @@ function OnboardingContent() {
                   Let&apos;s set up your AI-powered social media assistant. 
                   This will only take a few minutes.
                 </p>
-                {connectRequested && (
+                {routeState.connectRequested && (
                   <div className="mt-4 space-y-3">
                     <p className="text-sm text-muted-foreground">
                       Connect Puter from inside the app. This opens the real sign-in flow on your next tap.
