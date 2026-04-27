@@ -77,35 +77,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let mounted = true;
 
     async function checkAuth() {
+      const guestModeRequested = hasGuestModeRequest();
+      const persistedGuestMode = readGuestMode();
+      const guestMode = guestModeRequested || persistedGuestMode;
+
+      if (guestModeRequested) {
+        writeGuestMode(true);
+      }
+
+      if (guestMode) {
+        const [onboarding, brandKit] = await Promise.all([
+          isOnboardingComplete().catch(() => false),
+          loadBrandKit().catch(() => null),
+        ]);
+
+        if (!mounted) return;
+
+        setState({
+          isLoading: false,
+          isAuthenticated: false,
+          isGuest: true,
+          user: null,
+          onboardingComplete: onboarding,
+          brandKit,
+        });
+        return;
+      }
+
       try {
         const authenticated = await isSignedIn().catch(() => false);
         const user = authenticated ? await getUser().catch(() => null) : null;
-        const guestModeRequested = hasGuestModeRequest();
-        const guestMode = !authenticated && (readGuestMode() || guestModeRequested);
 
         if (!mounted) return;
 
         if (!authenticated) {
-          if (guestModeRequested) {
-            writeGuestMode(true);
-          }
           clearCachedAuth();
-          const [onboarding, brandKit] = guestMode
-            ? await Promise.all([
-                isOnboardingComplete().catch(() => false),
-                loadBrandKit().catch(() => null),
-              ])
-            : [false, null];
-
-          if (!mounted) return;
 
           setState({
             isLoading: false,
             isAuthenticated: false,
-            isGuest: guestMode,
+            isGuest: false,
             user: null,
-            onboardingComplete: onboarding,
-            brandKit,
+            onboardingComplete: false,
+            brandKit: null,
           });
           return;
         }
@@ -130,27 +144,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch {
         if (!mounted) return;
         clearCachedAuth();
-        const guestModeRequested = hasGuestModeRequest();
-        if (guestModeRequested) {
-          writeGuestMode(true);
-        }
-        const guestMode = readGuestMode() || guestModeRequested;
-        const [onboarding, brandKit] = guestMode
-          ? await Promise.all([
-              isOnboardingComplete().catch(() => false),
-              loadBrandKit().catch(() => null),
-            ])
-          : [false, null];
-
-        if (!mounted) return;
 
         setState({
           isLoading: false,
           isAuthenticated: false,
-          isGuest: guestMode,
+          isGuest: false,
           user: null,
-          onboardingComplete: onboarding,
-          brandKit,
+          onboardingComplete: false,
+          brandKit: null,
         });
       }
     }

@@ -1,24 +1,21 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/context/AuthContext';
 import { getPuterAuthDiagnostics, waitForPuter, type PuterAuthDiagnostics } from '@/lib/services/puterService';
-import { NeonButton } from '@/components/nexus/NeonButton';
 import { GlassCard } from '@/components/nexus/GlassCard';
 
 function LandingContent() {
   const router = useRouter();
-  const { isAuthenticated, isGuest, onboardingComplete, user, login, enterGuestMode } = useAuth();
-  const [isSigningIn, setIsSigningIn] = useState(false);
+  const { isAuthenticated, isGuest, onboardingComplete, user } = useAuth();
   const [hasRedirected, setHasRedirected] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
   const [nextPath, setNextPath] = useState<string | null>(null);
   const [needsManualReauth, setNeedsManualReauth] = useState(false);
   const [puterReady, setPuterReady] = useState(false);
   const [authDiagnostics, setAuthDiagnostics] = useState<PuterAuthDiagnostics | null>(null);
   const guestEntryHref = `/onboarding?guest=1${nextPath ? `&next=${encodeURIComponent(nextPath)}` : ''}`;
+  const connectEntryHref = `/onboarding?guest=1&connect=1${nextPath ? `&next=${encodeURIComponent(nextPath)}` : ''}`;
 
   const refreshDiagnostics = useCallback(async () => {
     const diagnostics = await getPuterAuthDiagnostics();
@@ -78,38 +75,6 @@ function LandingContent() {
     }
   }, [isAuthenticated, isGuest, user, onboardingComplete, hasRedirected, nextPath, router]);
 
-  const handleSkip = useCallback(() => {
-    enterGuestMode();
-    router.push(guestEntryHref);
-  }, [enterGuestMode, guestEntryHref, router]);
-
-  const handleSignIn = useCallback(async () => {
-    if (isSigningIn) return;
-    setIsSigningIn(true);
-    setAuthError(null);
-    try {
-      if (typeof window !== 'undefined' && !window.puter && !puterReady) {
-        const ready = await waitForPuter();
-        await refreshDiagnostics();
-        if (!ready) {
-          setAuthError('Puter is still loading. If it does not unlock in a moment, refresh the page and try again.');
-          return;
-        }
-      }
-
-      const success = await login();
-      if (success) {
-        const destination = nextPath || (onboardingComplete ? '/dashboard' : '/onboarding');
-        window.location.assign(destination);
-      }
-    } catch (error) {
-      await refreshDiagnostics();
-      setAuthError(error instanceof Error ? error.message : 'Puter sign-in failed.');
-    } finally {
-      setIsSigningIn(false);
-    }
-  }, [isSigningIn, login, puterReady, nextPath, onboardingComplete, refreshDiagnostics]);
-
   // Don't show loading screen - page loads instantly
   // Auth check happens in background
 
@@ -138,43 +103,32 @@ function LandingContent() {
 
           {/* CTA */}
           <div className="flex flex-col items-center justify-center gap-4 mb-12">
-            <Link
+            <a
               href={guestEntryHref}
-              onClick={handleSkip}
               className="inline-flex items-center justify-center font-medium rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-background bg-gradient-to-r from-[var(--nexus-cyan)] to-[var(--nexus-violet)] text-background hover:shadow-[0_0_30px_rgba(0,245,255,0.5)] focus:ring-[var(--nexus-cyan)] h-12 text-base gap-2.5 px-10"
             >
               Enter App
-            </Link>
+            </a>
             <p className="text-sm text-muted-foreground max-w-md">
               Start in guest mode and connect Puter later from inside the app.
             </p>
             <a
-              href="https://puter.com/action/sign-in"
-              target="_blank"
-              rel="noreferrer"
+              href={connectEntryHref}
               className="inline-flex items-center justify-center font-medium rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-background bg-transparent text-foreground border border-border hover:bg-muted/50 focus:ring-muted h-12 text-base gap-2.5 px-10"
-              onClick={() => {
-                void handleSignIn();
-              }}
             >
-              {isSigningIn ? 'Signing In...' : 'Connect Puter'}
+              Connect Puter
             </a>
             <p className="text-sm text-muted-foreground">
               Free to use - pay only for AI credits
             </p>
-            {!puterReady && !authError && (
+            {!puterReady && (
               <p className="text-sm text-muted-foreground max-w-md">
                 Puter is optional on this screen. If it is not cooperating, enter the app and connect it later.
               </p>
             )}
-            {needsManualReauth && !authError && (
+            {needsManualReauth && (
               <p className="text-sm text-muted-foreground max-w-md">
                 Your session needs to be reconnected. Tap the button to authorize Puter.
-              </p>
-            )}
-            {authError && (
-              <p className="text-sm text-destructive max-w-md">
-                {authError}
               </p>
             )}
             {authDiagnostics && (

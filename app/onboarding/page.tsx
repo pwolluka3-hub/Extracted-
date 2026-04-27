@@ -52,8 +52,11 @@ const MODEL_OPTIONS = [
 
 function OnboardingContent() {
   const router = useRouter();
-  const { isLoading, isAuthenticated, isGuest, onboardingComplete, refreshBrandKit, setOnboardingComplete: setAuthOnboardingComplete } = useAuth();
+  const { isLoading, isAuthenticated, isGuest, onboardingComplete, login, refreshBrandKit, setOnboardingComplete: setAuthOnboardingComplete } = useAuth();
   const [nextPath, setNextPath] = useState('/onboarding');
+  const [connectRequested, setConnectRequested] = useState(false);
+  const [isConnectingPuter, setIsConnectingPuter] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
   
   const [step, setStep] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -89,6 +92,7 @@ function OnboardingContent() {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
     setNextPath(params.get('next') || '/onboarding');
+    setConnectRequested(params.get('connect') === '1');
   }, []);
 
   useEffect(() => {
@@ -97,6 +101,25 @@ function OnboardingContent() {
       router.push(`/?reauth=1&next=${nextTarget}`);
     }
   }, [isLoading, isAuthenticated, isGuest, nextPath, router]);
+
+  const handleConnectPuter = async () => {
+    if (isConnectingPuter) return;
+
+    setIsConnectingPuter(true);
+    setConnectError(null);
+
+    try {
+      const success = await login();
+      if (success) {
+        setConnectRequested(false);
+        router.replace(nextPath || '/onboarding');
+      }
+    } catch (error) {
+      setConnectError(error instanceof Error ? error.message : 'Puter sign-in failed.');
+    } finally {
+      setIsConnectingPuter(false);
+    }
+  };
 
   const handleNext = () => {
     if (step < 4) {
@@ -247,6 +270,21 @@ function OnboardingContent() {
                   Let&apos;s set up your AI-powered social media assistant. 
                   This will only take a few minutes.
                 </p>
+                {connectRequested && (
+                  <div className="mt-4 space-y-3">
+                    <p className="text-sm text-muted-foreground">
+                      Connect Puter from inside the app. This opens the real sign-in flow on your next tap.
+                    </p>
+                    <NeonButton onClick={handleConnectPuter} className="w-full" disabled={isConnectingPuter}>
+                      {isConnectingPuter ? 'Connecting Puter...' : 'Connect Puter'}
+                    </NeonButton>
+                  </div>
+                )}
+                {connectError && (
+                  <p className="text-sm text-destructive mt-3">
+                    {connectError}
+                  </p>
+                )}
               </div>
               <NeonButton onClick={handleNext} className="w-full">
                 Get Started
