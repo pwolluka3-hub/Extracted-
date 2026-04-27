@@ -2,6 +2,7 @@
   "name": "nexusai",
   "version": "1.0.0",
   "private": true,
+  "packageManager": "pnpm@10.33.0",
   "scripts": {
     "dev": "sh ./scripts/run-next.sh dev --webpack",
     "build": "sh ./scripts/run-next.sh build --webpack",
