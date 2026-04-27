@@ -210,88 +210,87 @@ export async function getPuterAuthDiagnostics(): Promise<PuterAuthDiagnostics> {
 
 // Authentication
 export async function signIn(): Promise<{ username: string } | null> {
-  try {
-    if (typeof window === 'undefined') {
-      throw new Error('Window not available');
+  if (typeof window === 'undefined') {
+    throw new Error('Window not available');
+  }
+
+  if (!window.puter) {
+    const ready = await waitForPuter();
+    if (!ready || !window.puter) {
+      throw new Error('Puter not available');
+    }
+  }
+
+  let resolvedUser: { username: string } | null = null;
+  const authAction = async () => {
+    try {
+      const maybeUser = await window.puter.auth.signIn();
+      if (maybeUser?.username) {
+        resolvedUser = maybeUser;
+        return;
+      }
+    } catch (primaryError) {
+      if (typeof window.puter.ui?.authenticateWithPuter !== 'function') {
+        throw primaryError;
+      }
     }
 
-    if (!window.puter) {
-      const ready = await waitForPuter();
-      if (!ready || !window.puter) {
-        throw new Error('Puter not available');
-      }
+    if (typeof window.puter.ui?.authenticateWithPuter === 'function') {
+      await window.puter.ui.authenticateWithPuter();
     }
+  };
 
-    let resolvedUser: { username: string } | null = null;
-    const authAction = async () => {
-      try {
-        const maybeUser = await window.puter.auth.signIn();
-        if (maybeUser?.username) {
-          resolvedUser = maybeUser;
-          return;
-        }
-      } catch (primaryError) {
-        if (typeof window.puter.ui?.authenticateWithPuter !== 'function') {
-          throw primaryError;
-        }
-      }
+  let authError: unknown = null;
+  const authAttempt = Promise.resolve()
+    .then(() => authAction())
+    .catch((error) => {
+      authError = error;
+    });
 
-      if (typeof window.puter.ui?.authenticateWithPuter === 'function') {
-        await window.puter.ui.authenticateWithPuter();
-      }
-    };
+  const deadline = Date.now() + PUTER_AUTH_TIMEOUT;
 
-    let authError: unknown = null;
-    const authAttempt = Promise.resolve()
-      .then(() => authAction())
-      .catch((error) => {
-        authError = error;
-      });
-
-    const deadline = Date.now() + PUTER_AUTH_TIMEOUT;
-
-    while (Date.now() < deadline) {
-      if (resolvedUser) {
-        cacheUser(resolvedUser);
-        return resolvedUser;
-      }
-
-      const user = await readAuthenticatedUser();
-      if (user) {
-        cacheUser(user);
-        return user;
-      }
-
-      if (authError) {
-        break;
-      }
-
-      await Promise.race([authAttempt, sleep(PUTER_AUTH_POLL_INTERVAL)]);
-    }
-
-    await Promise.race([authAttempt, sleep(1000)]);
-
+  while (Date.now() < deadline) {
     if (resolvedUser) {
       cacheUser(resolvedUser);
       return resolvedUser;
     }
 
-    const finalUser = await readAuthenticatedUser();
-    if (finalUser) {
-      cacheUser(finalUser);
-      return finalUser;
+    const user = await readAuthenticatedUser();
+    if (user) {
+      cacheUser(user);
+      return user;
     }
 
-    if (authError instanceof Error) {
-      throw authError;
+    if (authError) {
+      break;
     }
 
-    throw new Error('Puter auth timed out before a user session became available');
-  } catch (error) {
-    console.error('Puter signIn error:', error);
-    clearCachedAuth();
-    return null;
+    await Promise.race([authAttempt, sleep(PUTER_AUTH_POLL_INTERVAL)]);
   }
+
+  await Promise.race([authAttempt, sleep(1000)]);
+
+  if (resolvedUser) {
+    cacheUser(resolvedUser);
+    return resolvedUser;
+  }
+
+  const finalUser = await readAuthenticatedUser();
+  if (finalUser) {
+    cacheUser(finalUser);
+    return finalUser;
+  }
+
+  clearCachedAuth();
+
+  if (authError instanceof Error) {
+    console.error('Puter signIn error:', authError);
+    throw authError;
+  }
+
+  const timeoutError = new Error('Puter auth timed out before a user session became available');
+  console.error('Puter signIn error:', timeoutError);
+  throw timeoutError;
 }
 
 export async function signOut(): Promise<void> {

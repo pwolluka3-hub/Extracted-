@@ -88,10 +88,10 @@ function LandingContent() {
       if (success) {
         const destination = nextPath || (onboardingComplete ? '/dashboard' : '/onboarding');
         window.location.assign(destination);
-      } else {
-        await refreshDiagnostics();
-        setAuthError('Puter sign-in did not complete. Please try again.');
       }
+    } catch (error) {
+      await refreshDiagnostics();
+      setAuthError(error instanceof Error ? error.message : 'Puter sign-in failed.');
     } finally {
       setIsSigningIn(false);
     }

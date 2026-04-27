@@ -39,13 +39,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async function checkAuth() {
       try {
         const authenticated = await isSignedIn().catch(() => false);
-        const user = authenticated ? await getUser().catch(() => getCachedAuthUser()) : null;
-        const cachedUser = getCachedAuthUser();
-        const hasLocalSession = !!cachedUser && hasCachedAuthSession();
+        const user = authenticated ? await getUser().catch(() => null) : null;
 
         if (!mounted) return;
 
-        if (!authenticated && !hasLocalSession) {
+        if (!authenticated) {
           clearCachedAuth();
           setState({
             isLoading: false,
@@ -68,7 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setState({
           isLoading: false,
           isAuthenticated: true,
-          user: user || cachedUser,
+          user,
           onboardingComplete: onboarding,
           brandKit,
         });
@@ -112,11 +110,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         
         return true;
       }
-      
-      return false;
+
+      throw new Error('Puter sign-in did not return a user session.');
     } catch (error) {
       console.error('Login error:', error);
-      return false;
+      throw error;
     }
   }, []);
 
