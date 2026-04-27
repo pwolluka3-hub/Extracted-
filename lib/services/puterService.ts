@@ -81,6 +81,111 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function buildPuterPopupFeatures(): string {
+  const width = 600;
+  const height = 700;
+  const left = Math.max(0, Math.round(window.screen.width / 2 - width / 2));
+  const top = Math.max(0, Math.round(window.screen.height / 2 - height / 2));
+
+  return [
+    'toolbar=no',
+    'location=no',
+    'directories=no',
+    'status=no',
+    'menubar=no',
+    'scrollbars=no',
+    'resizable=no',
+    'copyhistory=no',
+    `width=${width}`,
+    `height=${height}`,
+    `top=${top}`,
+    `left=${left}`,
+  ].join(', ');
+}
+
+async function signInThroughManagedPopup(): Promise<void> {
+  if (typeof window === 'undefined' || !window.puter) {
+    throw new Error('Puter not available');
+  }
+
+  const puterClient = window.puter as typeof window.puter & {
+    defaultGUIOrigin?: string;
+    setAuthToken?: (token: string) => void;
+    setAppID?: (appId: string) => void;
+  };
+
+  const guiOrigin = puterClient.defaultGUIOrigin || 'https://puter.com';
+  const popupUrl = `${guiOrigin}/?embedded_in_popup=true&request_auth=true${window.crossOriginIsolated ? '&cross_origin_isolated=true' : ''}`;
+  const popup = window.open(popupUrl, 'Puter', buildPuterPopupFeatures());
+
+  if (!popup) {
+    throw new Error('Popup blocked. Allow popups for this site and tap Connect Puter again.');
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+
+    const cleanup = () => {
+      window.removeEventListener('message', onMessage);
+      clearInterval(closeWatcher);
+      clearTimeout(timeoutHandle);
+    };
+
+    const finishResolve = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+
+    const finishReject = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== guiOrigin) return;
+
+      const data = event.data as {
+        msg?: string;
+        token?: string;
+        app_uid?: string;
+        success?: boolean;
+        error?: string;
+      } | null;
+
+      if (!data) return;
+
+      if (data.msg === 'puter.token' && data.token) {
+        puterClient.setAuthToken?.(data.token);
+        if (data.app_uid) {
+          puterClient.setAppID?.(data.app_uid);
+        }
+        finishResolve();
+        return;
+      }
+
+      if (data.success === false) {
+        finishReject(new Error(data.error || 'Puter authentication failed.'));
+      }
+    };
+
+    const closeWatcher = window.setInterval(() => {
+      if (popup.closed) {
+        finishReject(new Error('Authentication window was closed before sign-in completed.'));
+      }
+    }, 250);
+
+    const timeoutHandle = window.setTimeout(() => {
+      finishReject(new Error('Puter auth timed out before a user session became available.'));
+    }, PUTER_AUTH_TIMEOUT);
+
+    window.addEventListener('message', onMessage);
+  });
+}
+
 async function readAuthenticatedUser(): Promise<{ username: string } | null> {
   if (typeof window === 'undefined' || !window.puter) return null;
 
@@ -223,6 +328,15 @@ export async function signIn(): Promise<{ username: string } | null> {
 
   let resolvedUser: { username: string } | null = null;
   const authAction = async () => {
+    if (typeof window !== 'undefined' && window.location.protocol.startsWith('http')) {
+      await signInThroughManagedPopup();
+      const popupUser = await readAuthenticatedUser();
+      if (popupUser) {
+        resolvedUser = popupUser;
+        return;
+      }
+    }
+
     if (typeof window.puter.ui?.authenticateWithPuter === 'function') {
       await window.puter.ui.authenticateWithPuter();
       const userAfterDialog = await readAuthenticatedUser();
