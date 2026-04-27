@@ -9,7 +9,6 @@ import { AgentProvider } from '@/lib/context/AgentContext';
 import { BrandKitProvider } from '@/lib/context/BrandKitContext';
 import { AppShell } from '@/components/layout/AppShell';
 import { FullPageLoading } from '@/components/nexus/LoadingPulse';
-import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 import { CommandPaletteWrapper } from '@/components/CommandPalette';
 import { NotificationBootstrap } from '@/components/NotificationBootstrap';
 
@@ -65,7 +64,6 @@ export default function AppLayout({
           <NotificationBootstrap />
         </AgentProvider>
       </BrandKitProvider>
-      <ServiceWorkerRegister />
     </AuthGuard>
   );
 }

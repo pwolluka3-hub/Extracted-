@@ -10,7 +10,6 @@ import { BrandKitProvider } from '@/lib/context/BrandKitContext';
 import { AppShell } from '@/components/layout/AppShell';
 import { FullPageLoading } from '@/components/nexus/LoadingPulse';
 import { CommandPaletteWrapper } from '@/components/CommandPalette';
-import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 import { NotificationBootstrap } from '@/components/NotificationBootstrap';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -60,7 +59,6 @@ export default function DashboardLayout({
           <NotificationBootstrap />
         </AgentProvider>
       </BrandKitProvider>
-      <ServiceWorkerRegister />
     </AuthGuard>
   );
 }
