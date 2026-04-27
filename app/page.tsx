@@ -9,7 +9,7 @@ import { GlassCard } from '@/components/nexus/GlassCard';
 
 function LandingContent() {
   const router = useRouter();
-  const { isAuthenticated, onboardingComplete, user, login } = useAuth();
+  const { isAuthenticated, isGuest, onboardingComplete, user, login, enterGuestMode } = useAuth();
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [hasRedirected, setHasRedirected] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -52,6 +52,12 @@ function LandingContent() {
 
   // Redirect authenticated users - only once
   useEffect(() => {
+    if (isGuest && !hasRedirected) {
+      setHasRedirected(true);
+      router.push(nextPath || (onboardingComplete ? '/dashboard' : '/onboarding'));
+      return;
+    }
+
     if (isAuthenticated && user && !hasRedirected) {
       setHasRedirected(true);
       try {
@@ -68,7 +74,13 @@ function LandingContent() {
         router.push('/onboarding');
       }
     }
-  }, [isAuthenticated, user, onboardingComplete, hasRedirected, nextPath, router]);
+  }, [isAuthenticated, isGuest, user, onboardingComplete, hasRedirected, nextPath, router]);
+
+  const handleSkip = useCallback(() => {
+    enterGuestMode();
+    const destination = nextPath || (onboardingComplete ? '/dashboard' : '/onboarding');
+    router.push(destination);
+  }, [enterGuestMode, nextPath, onboardingComplete, router]);
 
   const handleSignIn = useCallback(async () => {
     if (isSigningIn) return;
@@ -126,19 +138,30 @@ function LandingContent() {
           {/* CTA */}
           <div className="flex flex-col items-center justify-center gap-4 mb-12">
             <NeonButton
-              onClick={handleSignIn}
-              loading={isSigningIn}
+              onClick={handleSkip}
               size="lg"
               className="px-10"
             >
-              {isSigningIn ? 'Signing In...' : !puterReady ? 'Connect Puter' : 'Get Started with Puter'}
+              Enter App
+            </NeonButton>
+            <p className="text-sm text-muted-foreground max-w-md">
+              Start in guest mode and connect Puter later from inside the app.
+            </p>
+            <NeonButton
+              onClick={handleSignIn}
+              loading={isSigningIn}
+              size="lg"
+              variant="outline"
+              className="px-10"
+            >
+              {isSigningIn ? 'Signing In...' : 'Connect Puter'}
             </NeonButton>
             <p className="text-sm text-muted-foreground">
               Free to use - pay only for AI credits
             </p>
             {!puterReady && !authError && (
               <p className="text-sm text-muted-foreground max-w-md">
-                Puter is still initializing in this browser session. You can tap now and the app will retry the connection for you.
+                Puter is optional on this screen. If it is not cooperating, enter the app and connect it later.
               </p>
             )}
             {needsManualReauth && !authError && (

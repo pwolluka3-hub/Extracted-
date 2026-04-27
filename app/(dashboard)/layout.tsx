@@ -16,25 +16,26 @@ import { NotificationBootstrap } from '@/components/NotificationBootstrap';
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { isLoading, isAuthenticated, onboardingComplete, brandKit } = useAuth();
+  const { isLoading, isAuthenticated, isGuest, onboardingComplete, brandKit } = useAuth();
   const isReady = onboardingComplete || !!brandKit;
   const loginRedirect = `/?reauth=1&next=${encodeURIComponent(pathname || '/dashboard')}`;
+  const canAccessApp = isAuthenticated || isGuest;
 
   useEffect(() => {
     if (isLoading) return;
 
-    if (!isAuthenticated) {
+    if (!canAccessApp) {
       router.replace(loginRedirect);
     } else if (!isReady) {
       router.replace('/onboarding');
     }
-  }, [isLoading, isAuthenticated, isReady, loginRedirect, router]);
+  }, [canAccessApp, isLoading, isReady, loginRedirect, router]);
 
   if (isLoading) {
     return <FullPageLoading text="Loading..." />;
   }
 
-  if (!isAuthenticated) {
+  if (!canAccessApp) {
     return <FullPageLoading text="Redirecting to login..." />;
   }
 

@@ -52,7 +52,7 @@ const MODEL_OPTIONS = [
 
 function OnboardingContent() {
   const router = useRouter();
-  const { isLoading, isAuthenticated, onboardingComplete, login, refreshBrandKit, setOnboardingComplete: setAuthOnboardingComplete } = useAuth();
+  const { isLoading, isAuthenticated, isGuest, onboardingComplete, refreshBrandKit, setOnboardingComplete: setAuthOnboardingComplete } = useAuth();
   const [nextPath, setNextPath] = useState('/onboarding');
   
   const [step, setStep] = useState(1);
@@ -92,11 +92,11 @@ function OnboardingContent() {
   }, []);
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
+    if (!isLoading && !isAuthenticated && !isGuest) {
       const nextTarget = encodeURIComponent(nextPath);
       router.push(`/?reauth=1&next=${nextTarget}`);
     }
-  }, [isLoading, isAuthenticated, nextPath, router]);
+  }, [isLoading, isAuthenticated, isGuest, nextPath, router]);
 
   const handleNext = () => {
     if (step < 4) {
@@ -176,7 +176,7 @@ function OnboardingContent() {
     return <FullPageLoading text="Loading..." />;
   }
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated && !isGuest) {
     return <FullPageLoading text="Redirecting to login..." />;
   }
 

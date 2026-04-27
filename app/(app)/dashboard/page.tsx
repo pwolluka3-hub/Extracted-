@@ -10,11 +10,12 @@ import Link from 'next/link';
 import { loadBrandKit } from '@/lib/services/memoryService';
 
 export default function DashboardPage() {
-  const { user } = useAuth();
+  const { user, isGuest, login } = useAuth();
   const agent = useAgent();
   const [dailyActions, setDailyActions] = useState<Array<{ title: string; description: string; action: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [brandKit, setBrandKit] = useState<any>(null);
+  const [isConnectingPuter, setIsConnectingPuter] = useState(false);
 
   useEffect(() => {
     const loadDashboard = async () => {
@@ -50,13 +51,18 @@ export default function DashboardPage() {
     loadDashboard();
   }, []);
 
-  if (!user) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <LoadingPulse />
-      </div>
-    );
-  }
+  const handleConnectPuter = async () => {
+    if (isConnectingPuter) return;
+
+    setIsConnectingPuter(true);
+    try {
+      await login();
+    } catch (error) {
+      console.error('[Dashboard] Puter connect failed:', error);
+    } finally {
+      setIsConnectingPuter(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-bg-primary via-bg-primary to-violet-900/20 p-4 md:p-8">
@@ -64,10 +70,30 @@ export default function DashboardPage() {
         {/* Header */}
         <div className="mb-12">
           <h1 className="text-4xl md:text-5xl font-bold text-white mb-2">
-            Welcome back, <span className="text-cyan">{brandKit?.brandName || user.username}</span>
+            Welcome back, <span className="text-cyan">{brandKit?.brandName || user?.username || 'Guest'}</span>
           </h1>
           <p className="text-gray-400">Your AI content command center</p>
         </div>
+
+        {isGuest && (
+          <GlassCard className="p-6 mb-8">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h2 className="text-xl font-semibold text-white mb-2">Connect Puter Later</h2>
+                <p className="text-sm text-gray-400 max-w-2xl">
+                  You entered in guest mode. Core setup works, but Puter-backed storage and account features stay limited until you connect it.
+                </p>
+              </div>
+              <NeonButton
+                onClick={handleConnectPuter}
+                loading={isConnectingPuter}
+                className="md:min-w-48"
+              >
+                {isConnectingPuter ? 'Connecting...' : 'Connect Puter'}
+              </NeonButton>
+            </div>
+          </GlassCard>
+        )}
 
         {/* Quick Stats */}
         {brandKit && (

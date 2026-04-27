@@ -5,9 +5,12 @@ import { signIn, signOut, getUser, isSignedIn, getCachedAuthUser, hasCachedAuthS
 import { initMemory, isOnboardingComplete, loadBrandKit } from '@/lib/services/memoryService';
 import type { BrandKit } from '@/lib/types';
 
+const GUEST_MODE_KEY = 'nexus:guest-mode';
+
 interface AuthState {
   isLoading: boolean;
   isAuthenticated: boolean;
+  isGuest: boolean;
   user: { username: string } | null;
   onboardingComplete: boolean;
   brandKit: BrandKit | null;
@@ -16,17 +19,43 @@ interface AuthState {
 interface AuthContextType extends AuthState {
   login: () => Promise<boolean>;
   logout: () => Promise<void>;
+  enterGuestMode: () => void;
   refreshBrandKit: () => Promise<void>;
   setOnboardingComplete: (complete: boolean) => void;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+function readGuestMode(): boolean {
+  if (typeof window === 'undefined') return false;
+
+  try {
+    return window.localStorage.getItem(GUEST_MODE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function writeGuestMode(enabled: boolean): void {
+  if (typeof window === 'undefined') return;
+
+  try {
+    if (enabled) {
+      window.localStorage.setItem(GUEST_MODE_KEY, 'true');
+    } else {
+      window.localStorage.removeItem(GUEST_MODE_KEY);
+    }
+  } catch {
+    // Ignore local storage failures
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const cachedUser = getCachedAuthUser();
   const [state, setState] = useState<AuthState>({
     isLoading: true,
     isAuthenticated: false,
+    isGuest: false,
     user: cachedUser,
     onboardingComplete: false,
     brandKit: null,
@@ -40,21 +69,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const authenticated = await isSignedIn().catch(() => false);
         const user = authenticated ? await getUser().catch(() => null) : null;
+        const guestMode = !authenticated && readGuestMode();
 
         if (!mounted) return;
 
         if (!authenticated) {
           clearCachedAuth();
+          const [onboarding, brandKit] = guestMode
+            ? await Promise.all([
+                isOnboardingComplete().catch(() => false),
+                loadBrandKit().catch(() => null),
+              ])
+            : [false, null];
+
+          if (!mounted) return;
+
           setState({
             isLoading: false,
             isAuthenticated: false,
+            isGuest: guestMode,
             user: null,
-            onboardingComplete: false,
-            brandKit: null,
+            onboardingComplete: onboarding,
+            brandKit,
           });
           return;
         }
 
+        writeGuestMode(false);
         await initMemory().catch(() => {});
         const [onboarding, brandKit] = await Promise.all([
           isOnboardingComplete().catch(() => false),
@@ -66,6 +107,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setState({
           isLoading: false,
           isAuthenticated: true,
+          isGuest: false,
           user,
           onboardingComplete: onboarding,
           brandKit,
@@ -73,12 +115,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch {
         if (!mounted) return;
         clearCachedAuth();
+        const guestMode = readGuestMode();
+        const [onboarding, brandKit] = guestMode
+          ? await Promise.all([
+              isOnboardingComplete().catch(() => false),
+              loadBrandKit().catch(() => null),
+            ])
+          : [false, null];
+
+        if (!mounted) return;
+
         setState({
           isLoading: false,
           isAuthenticated: false,
+          isGuest: guestMode,
           user: null,
-          onboardingComplete: false,
-          brandKit: null,
+          onboardingComplete: onboarding,
+          brandKit,
         });
       }
     }
@@ -93,6 +146,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const user = await signIn();
 
       if (user) {
+        writeGuestMode(false);
         await initMemory().catch((error) => {
           console.error('Init memory after login failed:', error);
         });
@@ -103,6 +157,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setState({
           isLoading: false,
           isAuthenticated: true,
+          isGuest: false,
           user,
           onboardingComplete: onboarding,
           brandKit,
@@ -118,12 +173,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const enterGuestMode = useCallback(() => {
+    writeGuestMode(true);
+    setState((current) => ({
+      ...current,
+      isLoading: false,
+      isAuthenticated: false,
+      isGuest: true,
+      user: null,
+    }));
+  }, []);
+
   const logout = useCallback(async () => {
     try {
+      writeGuestMode(false);
       await signOut();
       setState({
         isLoading: false,
         isAuthenticated: false,
+        isGuest: false,
         user: null,
         onboardingComplete: false,
         brandKit: null,
@@ -152,6 +220,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ...state,
         login,
         logout,
+        enterGuestMode,
         refreshBrandKit,
         setOnboardingComplete: setOnboardingCompleteState,
       }}
