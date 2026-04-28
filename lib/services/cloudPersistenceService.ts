@@ -1,6 +1,6 @@
 'use client';
 
-import type { BrandKit, ChatMessage, ContentDraft, AppSettings } from '@/lib/types';
+import type { AppSettings, BrandKit, ChatMessage, ContentDraft, DraftVersion, Platform } from '@/lib/types';
 import { getUser, kvGet, kvSet } from './puterService';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 
@@ -18,6 +18,20 @@ interface JsonRow<T> {
   workspace_id?: string;
   data?: T;
   updated_at?: string;
+}
+
+interface DraftRow {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  versions: DraftVersion[] | null;
+  current_version: number | null;
+  status: ContentDraft['status'];
+  platforms: Platform[] | null;
+  content_type: string | null;
+  scheduled_at: string | null;
+  published_at: string | null;
+  publish_results: ContentDraft['publishResults'] | null;
 }
 
 export function isCloudPersistenceEnabled(): boolean {
@@ -191,7 +205,9 @@ export async function listCloudDrafts(): Promise<ContentDraft[]> {
 
   if (error) throw error;
 
-  return (data || []).map((row: any) => ({
+  const rows = (data || []) as DraftRow[];
+
+  return rows.map((row) => ({
     id: row.id,
     created: row.created_at,
     updated: row.updated_at,

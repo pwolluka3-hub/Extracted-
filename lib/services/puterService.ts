@@ -10,6 +10,26 @@ const LOCAL_FILE_PREFIX = 'nexus:file:';
 const LOCAL_AUTH_KEY = 'nexus:auth:user';
 const LOCAL_AUTH_SESSION_KEY = 'nexus:auth:session';
 const SENSITIVE_KV_KEY_PATTERN = /(?:^|[-_])(key|api[-_]?key|access[-_]?token|refresh[-_]?token|token|secret|password|credential)(?:$|[-_])/i;
+const SAFE_LOCAL_KV_KEYS = new Set([
+  'ai_model',
+  'default_model',
+  'image_provider',
+  'video_provider',
+  'onboarding_complete',
+  'local_user_id',
+  'linkinbio_config',
+  'favorite_hashtags',
+  'saved_trends',
+  'watermark_config',
+]);
+const SAFE_LOCAL_KV_PREFIXES = [
+  'provider_status_',
+  'posts_count_',
+  'usage_',
+  'usage_total_',
+  'best_times_',
+  'music_',
+];
 let puterScriptPromise: Promise<boolean> | null = null;
 
 export interface PuterAuthDiagnostics {
@@ -29,8 +49,16 @@ export function isSensitiveKvKey(key: string): boolean {
   return SENSITIVE_KV_KEY_PATTERN.test(key);
 }
 
-function shouldMirrorKvToLocalStorage(key: string): boolean {
-  return !isSensitiveKvKey(key);
+export function canMirrorKvToLocalStorage(key: string): boolean {
+  if (isSensitiveKvKey(key)) {
+    return false;
+  }
+
+  if (SAFE_LOCAL_KV_KEYS.has(key)) {
+    return true;
+  }
+
+  return SAFE_LOCAL_KV_PREFIXES.some((prefix) => key.startsWith(prefix));
 }
 
 function localKvKey(key: string): string {
@@ -229,7 +257,14 @@ function ensurePuterScript(): Promise<boolean> {
         resolve(value);
       };
 
-      existingScript.addEventListener('load', () => finish(true), { once: true });
+      existingScript.addEventListener('load', () => {
+        if (window.puter) {
+          finish(true);
+          return;
+        }
+
+        window.setTimeout(() => finish(!!window.puter), 100);
+      }, { once: true });
       existingScript.addEventListener('error', () => finish(false), { once: true });
       setTimeout(() => finish(!!window.puter), PUTER_READY_TIMEOUT);
       return;
@@ -238,7 +273,14 @@ function ensurePuterScript(): Promise<boolean> {
     const script = document.createElement('script');
     script.src = PUTER_SCRIPT_URL;
     script.async = true;
-    script.onload = () => resolve(!!window.puter || true);
+    script.onload = () => {
+      if (window.puter) {
+        resolve(true);
+        return;
+      }
+
+      window.setTimeout(() => resolve(!!window.puter), 100);
+    };
     script.onerror = () => resolve(false);
     document.head.appendChild(script);
   }).finally(() => {
@@ -477,7 +519,7 @@ export async function isSignedIn(): Promise<boolean> {
 export async function kvSet(key: string, value: unknown): Promise<boolean> {
   try {
     const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
-    if (hasLocalStorage() && shouldMirrorKvToLocalStorage(key)) {
+    if (hasLocalStorage() && canMirrorKvToLocalStorage(key)) {
       window.localStorage.setItem(localKvKey(key), stringValue);
     } else if (hasLocalStorage()) {
       window.localStorage.removeItem(localKvKey(key));
@@ -500,7 +542,7 @@ export async function kvGet<T = string>(key: string, parse = false): Promise<T |
       value = await window.puter.kv.get(key);
     }
 
-    if (value === null && hasLocalStorage() && shouldMirrorKvToLocalStorage(key)) {
+    if (value === null && hasLocalStorage() && canMirrorKvToLocalStorage(key)) {
       value = window.localStorage.getItem(localKvKey(key));
     }
 

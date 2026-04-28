@@ -108,17 +108,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           brandKit: null,
         });
 
-        void Promise.all([
-          withTimeout(isOnboardingComplete().catch(() => false), false),
-          withTimeout(loadBrandKit().catch(() => null), null),
-        ]).then(([onboarding, brandKit]) => {
-          if (!mounted) return;
-          setState((current) => ({
-            ...current,
-            onboardingComplete: onboarding,
-            brandKit,
-          }));
-        });
+        void (async () => {
+          try {
+            const [onboarding, brandKit] = await Promise.all([
+              withTimeout(isOnboardingComplete().catch(() => false), false),
+              withTimeout(loadBrandKit().catch(() => null), null),
+            ]);
+
+            if (!mounted) return;
+            setState((current) => ({
+              ...current,
+              onboardingComplete: onboarding,
+              brandKit,
+            }));
+          } catch (error) {
+            console.error('[AuthContext] Failed to load guest mode data:', error);
+          }
+        })();
         return;
       }
 

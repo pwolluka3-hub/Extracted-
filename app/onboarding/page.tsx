@@ -128,12 +128,19 @@ function OnboardingContent() {
 
     const timeoutId = window.setTimeout(() => {
       setAuthBootstrapExpired(true);
+      if (!isAuthenticated && !canUseGuestFlow) {
+        enterGuestMode();
+        setRouteState((current) => ({
+          ...current,
+          guestRouteRequested: true,
+        }));
+      }
     }, ONBOARDING_AUTH_TIMEOUT);
 
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [isLoading]);
+  }, [canUseGuestFlow, enterGuestMode, isAuthenticated, isLoading]);
 
   const handleContinueAsGuest = () => {
     enterGuestMode();
