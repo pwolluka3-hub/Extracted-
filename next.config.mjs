@@ -27,7 +27,9 @@ const nextConfig = {
             // BUG FIX #3: Harden CSP - remove unsafe-eval, restrict unsafe-inline
             value: [
               "default-src 'self'",
-              "script-src 'self' https://js.puter.com https://cdn.puter.com https://puter.com https://*.puter.com 'wasm-unsafe-eval'",
+              // Next.js app router injects inline bootstrap scripts for hydration.
+              // Without unsafe-inline here, the UI renders but client interactions never bind.
+              "script-src 'self' 'unsafe-inline' https://js.puter.com https://cdn.puter.com https://puter.com https://*.puter.com 'wasm-unsafe-eval'",
               "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
               "font-src 'self' https://fonts.gstatic.com",
               "img-src 'self' data: https:",
