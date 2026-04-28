@@ -293,6 +293,6 @@ export async function downloadImageFromUrl(url: string, filename: string): Promi
   } catch (error) {
     console.error('Failed to download image:', error);
     // Fallback: open in new tab
-    window.open(url, '_blank');
+    window.open(url, '_blank', 'noopener,noreferrer');
   }
 }

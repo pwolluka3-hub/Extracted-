@@ -554,7 +554,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   ): Promise<string> => {
     const original = (content || '').trim();
     if (!original) {
-      return 'I completed the request. The result payload was empty, so I returned this fallback response to keep the workflow moving.';
+      return 'The provider returned an empty result. No content was generated, so the request needs to be retried.';
     }
 
     let candidate = original;
@@ -642,7 +642,7 @@ Rules:
       console.error('Fallback chat error:', fallbackError);
     }
 
-    return `I couldn't complete the provider call right now, but I kept your workflow active.\n\nRequest: ${request}\n\nNext best output:\n- Core direction locked\n- Regeneration can be retried immediately\n- No data was lost`;
+    return `I couldn't complete the provider call right now.\n\nRequest: ${request}\n\nWhat happened:\n- The generation request failed before a usable result was returned\n- No final content was produced\n- Retry the request or switch providers`;
   }, [state.currentModel]);
 
   // Process attached files

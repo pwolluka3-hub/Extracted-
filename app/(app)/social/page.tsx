@@ -215,7 +215,7 @@ export default function SocialHubPage() {
           <NeonButton
             variant="ghost"
             size="sm"
-            onClick={() => window.open('https://ayrshare.com', '_blank')}
+            onClick={() => window.open('https://ayrshare.com', '_blank', 'noopener,noreferrer')}
           >
             <ExternalLink className="w-4 h-4 mr-2" />
             Get API Key

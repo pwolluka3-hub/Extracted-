@@ -6,6 +6,7 @@ import { initMemory, isOnboardingComplete, loadBrandKit } from '@/lib/services/m
 import type { BrandKit } from '@/lib/types';
 
 const GUEST_MODE_KEY = 'nexus:guest-mode';
+const AUTH_BOOTSTRAP_TIMEOUT = 12000;
 
 interface AuthState {
   isLoading: boolean;
@@ -61,6 +62,16 @@ function hasGuestModeRequest(): boolean {
   }
 }
 
+function timeoutAfter<T>(ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    window.setTimeout(() => resolve(fallback), ms);
+  });
+}
+
+async function withTimeout<T>(task: Promise<T>, fallback: T, ms = AUTH_BOOTSTRAP_TIMEOUT): Promise<T> {
+  return Promise.race([task, timeoutAfter(ms, fallback)]);
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const cachedUser = getCachedAuthUser();
   const [state, setState] = useState<AuthState>({
@@ -98,8 +109,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
 
         void Promise.all([
-          isOnboardingComplete().catch(() => false),
-          loadBrandKit().catch(() => null),
+          withTimeout(isOnboardingComplete().catch(() => false), false),
+          withTimeout(loadBrandKit().catch(() => null), null),
         ]).then(([onboarding, brandKit]) => {
           if (!mounted) return;
           setState((current) => ({
@@ -112,12 +123,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       try {
-        const authenticated = await isSignedIn().catch(() => false);
-        const user = authenticated ? await getUser().catch(() => null) : null;
+        const authenticated = await withTimeout(isSignedIn().catch(() => false), false);
+        const user = authenticated
+          ? await withTimeout(getUser().catch(() => null), null)
+          : null;
 
         if (!mounted) return;
 
-        if (!authenticated) {
+        if (!authenticated || !user) {
           clearCachedAuth();
 
           setState({
@@ -132,10 +145,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         writeGuestMode(false);
-        await initMemory().catch(() => {});
+        await withTimeout(initMemory().catch(() => undefined), undefined);
         const [onboarding, brandKit] = await Promise.all([
-          isOnboardingComplete().catch(() => false),
-          loadBrandKit().catch(() => null),
+          withTimeout(isOnboardingComplete().catch(() => false), false),
+          withTimeout(loadBrandKit().catch(() => null), null),
         ]);
 
         if (!mounted) return;

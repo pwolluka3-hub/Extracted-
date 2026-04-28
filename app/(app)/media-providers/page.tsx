@@ -255,7 +255,7 @@ export default function MediaProvidersPage() {
   const handleSignupAndSave = (provider: ProviderConfig) => {
     // Open signup in new tab
     if (provider.signupUrl) {
-      window.open(provider.signupUrl, '_blank');
+      window.open(provider.signupUrl, '_blank', 'noopener,noreferrer');
     }
     // Show the API key input
     setEditingProvider(provider.id);

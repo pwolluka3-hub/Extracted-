@@ -9,6 +9,7 @@ const LOCAL_KV_PREFIX = 'nexus:kv:';
 const LOCAL_FILE_PREFIX = 'nexus:file:';
 const LOCAL_AUTH_KEY = 'nexus:auth:user';
 const LOCAL_AUTH_SESSION_KEY = 'nexus:auth:session';
+const SENSITIVE_KV_KEY_PATTERN = /(?:^|[-_])(key|api[-_]?key|access[-_]?token|refresh[-_]?token|token|secret|password|credential)(?:$|[-_])/i;
 let puterScriptPromise: Promise<boolean> | null = null;
 
 export interface PuterAuthDiagnostics {
@@ -22,6 +23,14 @@ export interface PuterAuthDiagnostics {
 
 function hasLocalStorage(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+}
+
+export function isSensitiveKvKey(key: string): boolean {
+  return SENSITIVE_KV_KEY_PATTERN.test(key);
+}
+
+function shouldMirrorKvToLocalStorage(key: string): boolean {
+  return !isSensitiveKvKey(key);
 }
 
 function localKvKey(key: string): string {
@@ -332,21 +341,32 @@ export async function signIn(): Promise<{ username: string } | null> {
 
   let resolvedUser: { username: string } | null = null;
   const authAction = async () => {
+    let popupError: Error | null = null;
+
     if (typeof window !== 'undefined' && window.location.protocol.startsWith('http')) {
-      await signInThroughManagedPopup();
-      const popupUser = await readAuthenticatedUser();
-      if (popupUser) {
-        resolvedUser = popupUser;
-        return;
+      try {
+        await signInThroughManagedPopup();
+        const popupUser = await readAuthenticatedUser();
+        if (popupUser) {
+          resolvedUser = popupUser;
+          return;
+        }
+      } catch (error) {
+        popupError = error instanceof Error ? error : new Error('Managed Puter popup failed.');
+        console.warn('Managed Puter popup failed, falling back to SDK auth:', popupError);
       }
     }
 
     if (typeof window.puter.ui?.authenticateWithPuter === 'function') {
-      await window.puter.ui.authenticateWithPuter();
-      const userAfterDialog = await readAuthenticatedUser();
-      if (userAfterDialog) {
-        resolvedUser = userAfterDialog;
-        return;
+      try {
+        await window.puter.ui.authenticateWithPuter();
+        const userAfterDialog = await readAuthenticatedUser();
+        if (userAfterDialog) {
+          resolvedUser = userAfterDialog;
+          return;
+        }
+      } catch (error) {
+        console.warn('Puter dialog auth failed, falling back to auth.signIn():', error);
       }
     }
 
@@ -354,6 +374,10 @@ export async function signIn(): Promise<{ username: string } | null> {
     if (maybeUser?.username) {
       resolvedUser = maybeUser;
       return;
+    }
+
+    if (popupError) {
+      throw popupError;
     }
   };
 
@@ -453,8 +477,10 @@ export async function isSignedIn(): Promise<boolean> {
 export async function kvSet(key: string, value: unknown): Promise<boolean> {
   try {
     const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
-    if (hasLocalStorage()) {
+    if (hasLocalStorage() && shouldMirrorKvToLocalStorage(key)) {
       window.localStorage.setItem(localKvKey(key), stringValue);
+    } else if (hasLocalStorage()) {
+      window.localStorage.removeItem(localKvKey(key));
     }
     if (isPuterAvailable()) {
       await window.puter.kv.set(key, stringValue);
@@ -474,7 +500,7 @@ export async function kvGet<T = string>(key: string, parse = false): Promise<T |
       value = await window.puter.kv.get(key);
     }
 
-    if (value === null && hasLocalStorage()) {
+    if (value === null && hasLocalStorage() && shouldMirrorKvToLocalStorage(key)) {
       value = window.localStorage.getItem(localKvKey(key));
     }
 

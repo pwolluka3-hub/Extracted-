@@ -400,7 +400,7 @@ export async function verifyProviderKey(providerId: string, apiKey: string): Pro
 export function openProviderSignup(providerId: string): void {
   const provider = PROVIDERS.find(p => p.id === providerId);
   if (provider) {
-    window.open(provider.signupUrl, '_blank', 'width=600,height=700');
+    window.open(provider.signupUrl, '_blank', 'noopener,noreferrer,width=600,height=700');
   }
 }
 

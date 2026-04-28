@@ -21,7 +21,7 @@ import {
   TestTube,
   Loader2,
 } from 'lucide-react';
-import { kvGet, kvSet } from '@/lib/services/puterService';
+import { kvDelete, kvGet, kvSet } from '@/lib/services/puterService';
 import { AI_PROVIDERS, callCustomProvider, type AIProvider } from '@/lib/services/godModeEngine';
 
 interface ProviderStatus {
@@ -87,7 +87,7 @@ export default function ProvidersPage() {
     const provider = AI_PROVIDERS.find(p => p.id === providerId);
     if (!provider || !provider.keyName) return;
 
-    await kvSet(provider.keyName, '');
+    await kvDelete(provider.keyName);
     setKeyInputs(prev => ({ ...prev, [providerId]: '' }));
     await loadProviderStatus();
   };
@@ -394,7 +394,7 @@ function MusicAPIKeyCard({
   };
 
   const removeKey = async () => {
-    await kvSet(keyName, '');
+    await kvDelete(keyName);
     setKeyInput('');
     setHasKey(false);
   };

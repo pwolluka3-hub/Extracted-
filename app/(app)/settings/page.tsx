@@ -5,7 +5,7 @@ import { useAuth } from '@/lib/context/AuthContext';
 import { GlassCard } from '@/components/nexus/GlassCard';
 import { NeonButton } from '@/components/nexus/NeonButton';
 import { StatusBadge } from '@/components/nexus/StatusBadge';
-import { kvGet, kvSet } from '@/lib/services/puterService';
+import { kvDelete, kvGet, kvSet } from '@/lib/services/puterService';
 import { saveProviderAccount, verifyProviderKey } from '@/lib/services/accountService';
 import {
   Brain,
@@ -270,48 +270,47 @@ export default function SettingsPage() {
   const handleSave = async () => {
     setSaving(true);
     try {
+      const syncStoredValue = (key: string, value: string) => {
+        const trimmed = value.trim();
+        return trimmed ? kvSet(key, trimmed) : kvDelete(key);
+      };
+
+      const storedSettings: Array<[string, string]> = [
+        ['elevenlabs_key', settings.elevenLabsKey],
+        ['speechify_key', settings.speechifyKey],
+        ['playht_key', settings.playhtKey],
+        ['resemble_key', settings.resembleKey],
+        ['suno_key', settings.sunoKey],
+        ['udio_key', settings.udioKey],
+        ['beatoven_key', settings.beatovenKey],
+        ['soundraw_key', settings.soundrawKey],
+        ['ayrshare_key', settings.ayrshareKey],
+        ['gemini_key', settings.geminiKey],
+        ['openrouter_key', settings.openrouterKey],
+        ['github_models_key', settings.githubModelsKey],
+        ['bytez_key', settings.bytezKey],
+        ['poe_key', settings.poeKey],
+        ['groq_key', settings.groqKey],
+        ['nvidia_key', settings.nvidiaKey],
+        ['together_key', settings.togetherKey],
+        ['fireworks_key', settings.fireworksKey],
+        ['deepseek_key', settings.deepseekKey],
+        ['ollama_url', settings.ollamaUrl],
+        ['stability_key', settings.stabilityKey],
+        ['leonardo_key', settings.leonardoKey],
+        ['ideogram_key', settings.ideogramKey],
+        ['fal_key', settings.falKey],
+        ['ltx_endpoint', settings.ltxEndpoint],
+        ['ltx_open_endpoint', settings.ltxOpenEndpoint],
+      ];
+
       const savePromises = [
         kvSet('ai_model', settings.aiModel),
         kvSet('default_model', settings.aiModel),
         kvSet('image_provider', settings.imageProvider),
         kvSet('video_provider', settings.videoProvider),
+        ...storedSettings.map(([key, value]) => syncStoredValue(key, value)),
       ];
-      
-      // Only save non-empty keys - Voice
-      if (settings.elevenLabsKey) savePromises.push(kvSet('elevenlabs_key', settings.elevenLabsKey));
-      if (settings.speechifyKey) savePromises.push(kvSet('speechify_key', settings.speechifyKey));
-      if (settings.playhtKey) savePromises.push(kvSet('playht_key', settings.playhtKey));
-      if (settings.resembleKey) savePromises.push(kvSet('resemble_key', settings.resembleKey));
-      
-      // Music
-      if (settings.sunoKey) savePromises.push(kvSet('suno_key', settings.sunoKey));
-      if (settings.udioKey) savePromises.push(kvSet('udio_key', settings.udioKey));
-      if (settings.beatovenKey) savePromises.push(kvSet('beatoven_key', settings.beatovenKey));
-      if (settings.soundrawKey) savePromises.push(kvSet('soundraw_key', settings.soundrawKey));
-      
-      // Publishing
-      if (settings.ayrshareKey) savePromises.push(kvSet('ayrshare_key', settings.ayrshareKey));
-      
-      // AI Providers
-      if (settings.geminiKey) savePromises.push(kvSet('gemini_key', settings.geminiKey));
-      if (settings.openrouterKey) savePromises.push(kvSet('openrouter_key', settings.openrouterKey));
-      if (settings.githubModelsKey) savePromises.push(kvSet('github_models_key', settings.githubModelsKey));
-      if (settings.bytezKey) savePromises.push(kvSet('bytez_key', settings.bytezKey));
-      if (settings.poeKey) savePromises.push(kvSet('poe_key', settings.poeKey));
-      if (settings.groqKey) savePromises.push(kvSet('groq_key', settings.groqKey));
-      if (settings.nvidiaKey) savePromises.push(kvSet('nvidia_key', settings.nvidiaKey));
-      if (settings.togetherKey) savePromises.push(kvSet('together_key', settings.togetherKey));
-      if (settings.fireworksKey) savePromises.push(kvSet('fireworks_key', settings.fireworksKey));
-      if (settings.deepseekKey) savePromises.push(kvSet('deepseek_key', settings.deepseekKey));
-      if (settings.ollamaUrl) savePromises.push(kvSet('ollama_url', settings.ollamaUrl));
-      
-      // Image Providers
-      if (settings.stabilityKey) savePromises.push(kvSet('stability_key', settings.stabilityKey));
-      if (settings.leonardoKey) savePromises.push(kvSet('leonardo_key', settings.leonardoKey));
-      if (settings.ideogramKey) savePromises.push(kvSet('ideogram_key', settings.ideogramKey));
-      if (settings.falKey) savePromises.push(kvSet('fal_key', settings.falKey));
-      if (settings.ltxEndpoint) savePromises.push(kvSet('ltx_endpoint', settings.ltxEndpoint));
-      if (settings.ltxOpenEndpoint) savePromises.push(kvSet('ltx_open_endpoint', settings.ltxOpenEndpoint));
       
       await Promise.all(savePromises);
 
