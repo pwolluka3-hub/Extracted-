@@ -26,6 +26,10 @@ export interface FileProcessorResult {
   suggestions?: string[];
 }
 
+export interface ProcessFileOptions {
+  skipAiSummary?: boolean;
+}
+
 // Detect file type from MIME type
 function detectFileType(mimeType: string, fileName?: string): FileType {
   if (mimeType.startsWith('image/')) return 'image';
@@ -98,7 +102,7 @@ async function extractPDFText(base64Data: string): Promise<string> {
       const pageText = textContent.items
         .map((item) => ('str' in item ? item.str : ''))
         .join(' ');
-      textParts.push(pageText);
+      textParts.push(`[Page ${i}]\n${pageText.trim()}`);
     }
 
     return textParts.join('\n\n');
@@ -355,7 +359,8 @@ export const fileProcessor = {
   // Process a single file
   async processFile(
     file: File,
-    userMessage?: string
+    userMessage?: string,
+    options: ProcessFileOptions = {}
 ): Promise<FileProcessorResult> {
   const id = `file_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
   const fileType = detectFileType(file.type, file.name);
@@ -396,8 +401,8 @@ export const fileProcessor = {
 
         processedFile.extractedText = text;
 
-        // Summarize with AI
-        if (text.length > 0) {
+        // Summarize with AI unless caller wants raw extraction speed
+        if (text.length > 0 && !options.skipAiSummary) {
           const summaryPrompt = `
 Summarize this document for social media content creation.
 Identify key points, quotes, or insights that could become posts.
@@ -410,6 +415,9 @@ ${text.slice(0, 8000)}
             'Create carousel slides from main points',
             'Write a LinkedIn article summary',
           ];
+        } else if (text.length > 0) {
+          aiResponse = 'Document text extracted successfully.';
+          suggestions = ['Ask for summary, key points, or direct conversion into posts'];
         }
         break;
       }
@@ -426,19 +434,25 @@ ${text.slice(0, 8000)}
           dataDescription = `JSON data: ${JSON.stringify(jsonData).slice(0, 500)}...`;
           processedFile.metadata = { preview: jsonData };
         }
+        processedFile.extractedText = dataDescription;
 
-        const analysisPrompt = `
+        if (!options.skipAiSummary) {
+          const analysisPrompt = `
 Analyze this data for potential social media content:
 ${dataDescription}
 
 Suggest insights, trends, or story angles that could be turned into engaging posts.
 `;
-        aiResponse = await aiService.chat([{ role: 'user', content: analysisPrompt }]);
-        suggestions = [
-          'Create an infographic from this data',
-          'Generate stat-based carousel',
-          'Write thread highlighting key findings',
-        ];
+          aiResponse = await aiService.chat([{ role: 'user', content: analysisPrompt }]);
+          suggestions = [
+            'Create an infographic from this data',
+            'Generate stat-based carousel',
+            'Write thread highlighting key findings',
+          ];
+        } else {
+          aiResponse = 'Data file parsed successfully.';
+          suggestions = ['Ask for trend extraction, insight ranking, or post-ready takeaways'];
+        }
         break;
       }
 
@@ -478,7 +492,7 @@ case 'video': {
   };
 
   // Summarize with AI
-  if (htmlData.text.length > 0) {
+  if (htmlData.text.length > 0 && !options.skipAiSummary) {
     const summaryPrompt = `
 Analyze this HTML page content for social media content creation.
 Title: ${htmlData.title}
@@ -500,6 +514,9 @@ Provide:
     'Write a carousel breaking down the content',
     'Generate discussion post with your take',
     ];
+  } else if (htmlData.text.length > 0) {
+    aiResponse = 'HTML text extracted successfully.';
+    suggestions = ['Ask for summary, quote extraction, or content angle generation'];
   } else {
     aiResponse = 'HTML file received but no text content could be extracted.';
     suggestions = ['Try a different HTML file'];
@@ -520,7 +537,7 @@ Provide:
   };
 
   // Analyze with AI
-  if (codeData.code.length > 0) {
+  if (codeData.code.length > 0 && !options.skipAiSummary) {
     const analysisPrompt = `
 Analyze this ${codeData.language} code for creating educational/technical social media content:
 
@@ -547,6 +564,9 @@ Provide:
     'Write "Today I Learned" post',
     'Make a code snippet graphic',
     ];
+  } else if (codeData.code.length > 0) {
+    aiResponse = 'Code extracted successfully.';
+    suggestions = ['Ask for explanation, architecture summary, or educational content conversion'];
   } else {
     aiResponse = 'Code file received but could not be parsed.';
     suggestions = ['Try a different code file'];
@@ -572,7 +592,8 @@ Provide:
   // Process multiple files
   async processFiles(
     files: File[],
-    userMessage?: string
+    userMessage?: string,
+    options: ProcessFileOptions = {}
   ): Promise<FileProcessorResult[]> {
     const results: FileProcessorResult[] = [];
     
@@ -594,7 +615,7 @@ Provide:
       }
 
       try {
-        const result = await this.processFile(file, userMessage);
+        const result = await this.processFile(file, userMessage, options);
         results.push(result);
       } catch (error) {
         results.push({

@@ -6,6 +6,14 @@ import { generateId } from './memoryService';
 
 // Agent Types
 export type AgentRole = 
+  | 'planner'
+  | 'identity'
+  | 'rules'
+  | 'structure'
+  | 'generator'
+  | 'distribution'
+  | 'memory'
+  | 'trend'
   | 'writer' 
   | 'hook' 
   | 'strategist' 
@@ -17,6 +25,14 @@ export type AgentRole =
   | 'hybrid';
 
 export type AgentCapability = 
+  | 'execution_planning'
+  | 'identity_modeling'
+  | 'rule_generation'
+  | 'structure_design'
+  | 'distribution_formatting'
+  | 'memory_management'
+  | 'trend_optimization'
+  | 'critical_validation'
   | 'text_generation'
   | 'hook_creation'
   | 'strategy_planning'
@@ -69,7 +85,22 @@ export interface AgentOutput {
 
 export interface SubTask {
   id: string;
-  type: 'hook' | 'body' | 'strategy' | 'optimize' | 'critique' | 'visual' | 'hashtag';
+  type:
+    | 'planner'
+    | 'identity'
+    | 'rules'
+    | 'structure'
+    | 'generator'
+    | 'distribution'
+    | 'memory'
+    | 'trend'
+    | 'hook'
+    | 'body'
+    | 'strategy'
+    | 'optimize'
+    | 'critique'
+    | 'visual'
+    | 'hashtag';
   input: string;
   assignedAgent: string;
   status: 'pending' | 'running' | 'completed' | 'failed';
@@ -90,6 +121,187 @@ export interface OrchestrationPlan {
 
 // Default Agent Templates
 const DEFAULT_AGENTS: Omit<AgentConfig, 'id' | 'taskHistory' | 'createdAt' | 'updatedAt'>[] = [
+  {
+    name: 'PlannerAgent',
+    role: 'planner',
+    capabilities: ['execution_planning'],
+    promptTemplate: `You are the Planner Agent in a multi-agent orchestration system.
+
+Role:
+- Interpret the user request and define an execution plan.
+- Do not generate final content.
+
+Input: {{input}}
+Brand Context: {{brandContext}}
+Memory Context: {{memoryContext}}
+
+Output format (strict):
+- Content type
+- Number of assets
+- Target formats/platforms
+- Required downstream agents in order`,
+    scoringWeights: { creativity: 0.1, relevance: 0.5, engagement: 0.1, brandAlignment: 0.3 },
+    performanceScore: 80,
+    evolutionState: 'active',
+    version: 1,
+  },
+  {
+    name: 'IdentityAgent',
+    role: 'identity',
+    capabilities: ['identity_modeling'],
+    promptTemplate: `You are the Identity Agent.
+
+Role:
+- Build a consistent identity from niche and goals.
+- Storytelling niche: define character + world constraints.
+- Personal brand niche: define persona + voice.
+- Business niche: define authority identity.
+
+User Input: {{input}}
+Execution Plan: {{executionPlan}}
+Brand Context: {{brandContext}}
+Memory Context: {{memoryContext}}
+
+Return only the identity definition that downstream agents can reuse.`,
+    scoringWeights: { creativity: 0.2, relevance: 0.4, engagement: 0.1, brandAlignment: 0.3 },
+    performanceScore: 80,
+    evolutionState: 'active',
+    version: 1,
+  },
+  {
+    name: 'RulesAgent',
+    role: 'rules',
+    capabilities: ['rule_generation'],
+    promptTemplate: `You are the Rules Agent.
+
+Role:
+- Generate strict niche-specific rules that control all downstream outputs.
+- Include style rules, constraints, avoid-list, and tone enforcement.
+
+User Input: {{input}}
+Execution Plan: {{executionPlan}}
+Identity: {{identity}}
+Brand Context: {{brandContext}}
+
+Return an explicit rule set. No content generation.`,
+    scoringWeights: { creativity: 0.15, relevance: 0.45, engagement: 0.1, brandAlignment: 0.3 },
+    performanceScore: 80,
+    evolutionState: 'active',
+    version: 1,
+  },
+  {
+    name: 'StructureAgent',
+    role: 'structure',
+    capabilities: ['structure_design'],
+    promptTemplate: `You are the Structure Agent.
+
+Role:
+- Define reusable structure for this request.
+- Story: scene progression.
+- Short-form: Hook -> Retention -> Loop.
+- Educational: Hook -> Value -> Takeaway.
+
+User Input: {{input}}
+Execution Plan: {{executionPlan}}
+Identity: {{identity}}
+Rules: {{rules}}
+
+Return only the structure blueprint.`,
+    scoringWeights: { creativity: 0.15, relevance: 0.5, engagement: 0.15, brandAlignment: 0.2 },
+    performanceScore: 80,
+    evolutionState: 'active',
+    version: 1,
+  },
+  {
+    name: 'ContentGeneratorAgent',
+    role: 'generator',
+    capabilities: ['text_generation', 'content_optimization'],
+    promptTemplate: `You are the Content Generator Agent.
+
+Role:
+- Produce core content from identity + rules + structure.
+- No generic writing.
+- No filler.
+- Follow structure strictly.
+- Optimize for engagement and retention.
+
+User Input: {{input}}
+Execution Plan: {{executionPlan}}
+Identity: {{identity}}
+Rules: {{rules}}
+Structure: {{structure}}
+Memory Context: {{memoryContext}}
+
+Return production-ready core content only.`,
+    scoringWeights: { creativity: 0.25, relevance: 0.3, engagement: 0.3, brandAlignment: 0.15 },
+    performanceScore: 80,
+    evolutionState: 'active',
+    version: 1,
+  },
+  {
+    name: 'DistributionAgent',
+    role: 'distribution',
+    capabilities: ['distribution_formatting', 'hashtag_research'],
+    promptTemplate: `You are the Caption & Distribution Agent.
+
+Role:
+- Convert content into platform-ready post variants.
+- Caption format: Hook -> Statement -> Question.
+- Add optimized hashtags and posting format notes.
+- Avoid repetition and weak hooks.
+
+Core Content: {{content}}
+Rules: {{rules}}
+Execution Plan: {{executionPlan}}
+Platform: {{platform}}
+
+Return caption and distribution package.`,
+    scoringWeights: { creativity: 0.2, relevance: 0.35, engagement: 0.35, brandAlignment: 0.1 },
+    performanceScore: 80,
+    evolutionState: 'active',
+    version: 1,
+  },
+  {
+    name: 'MemoryAgent',
+    role: 'memory',
+    capabilities: ['memory_management'],
+    promptTemplate: `You are the Memory Agent.
+
+Role:
+- Extract memory-critical context to preserve continuity.
+- Prevent repetition and keep identity consistency.
+
+User Input: {{input}}
+Identity: {{identity}}
+Rules: {{rules}}
+Recent Memory: {{memoryContext}}
+
+Return concise memory notes for reuse.`,
+    scoringWeights: { creativity: 0.05, relevance: 0.45, engagement: 0.05, brandAlignment: 0.45 },
+    performanceScore: 78,
+    evolutionState: 'active',
+    version: 1,
+  },
+  {
+    name: 'TrendAgent',
+    role: 'trend',
+    capabilities: ['trend_optimization', 'engagement_prediction'],
+    promptTemplate: `You are the Trend Agent.
+
+Role:
+- Inject viral optimization while preserving niche consistency.
+- Improve hooks, pacing, and packaging for current platform behavior.
+
+Core Content: {{content}}
+Execution Plan: {{executionPlan}}
+Platform: {{platform}}
+
+Return trend adjustments only.`,
+    scoringWeights: { creativity: 0.15, relevance: 0.3, engagement: 0.45, brandAlignment: 0.1 },
+    performanceScore: 78,
+    evolutionState: 'active',
+    version: 1,
+  },
   {
     name: 'HookMaster',
     role: 'hook',
@@ -171,7 +383,13 @@ Your job is to:
 Content to review: {{content}}
 Brand Context: {{brandContext}}
 
-Provide a detailed critique with a score from 0-100.`,
+Return format:
+VERDICT: APPROVE or REJECT
+SCORE: 0-100
+CRITIQUE: concise findings
+FIXES: bullet list of required fixes.
+
+Reject average/generic output. Only approve if it is publish-ready.`,
     scoringWeights: { creativity: 0.2, relevance: 0.3, engagement: 0.2, brandAlignment: 0.3 },
     performanceScore: 75,
     evolutionState: 'active',
@@ -277,6 +495,14 @@ const DEEP_REASONING_DIRECTIVE = `Deep Reasoning Mode:
 - Do not reveal internal reasoning steps or chain-of-thought.
 - Return only the final deliverable for this agent role.`;
 const VALID_AGENT_CAPABILITIES: ReadonlySet<AgentCapability> = new Set([
+  'execution_planning',
+  'identity_modeling',
+  'rule_generation',
+  'structure_design',
+  'distribution_formatting',
+  'memory_management',
+  'trend_optimization',
+  'critical_validation',
   'text_generation',
   'hook_creation',
   'strategy_planning',
@@ -288,6 +514,14 @@ const VALID_AGENT_CAPABILITIES: ReadonlySet<AgentCapability> = new Set([
   'multi_task',
 ]);
 const VALID_AGENT_ROLES: ReadonlySet<AgentRole> = new Set([
+  'planner',
+  'identity',
+  'rules',
+  'structure',
+  'generator',
+  'distribution',
+  'memory',
+  'trend',
   'writer',
   'hook',
   'strategist',
@@ -514,79 +748,127 @@ export async function createOrchestrationPlan(
   const agents = await loadAgents();
   const getAgent = (role: AgentRole) => 
     agents.find(a => a.role === role && a.evolutionState !== 'deprecated');
+  const getAgentId = (primary: AgentRole, fallback?: AgentRole) =>
+    getAgent(primary)?.id || (fallback ? getAgent(fallback)?.id || '' : '');
   
   if (requestType === 'content' || requestType === 'full') {
-    // Phase 1: Strategy + Hook (parallel)
-    const hookTask: SubTask = {
+    const plannerTask: SubTask = {
       id: generateId(),
-      type: 'hook',
+      type: 'planner',
       input: userRequest,
-      assignedAgent: getAgent('hook')?.id || '',
+      assignedAgent: getAgentId('planner', 'strategist'),
       status: 'pending',
     };
-    
-    const strategyTask: SubTask = {
+
+    const identityTask: SubTask = {
       id: generateId(),
-      type: 'strategy',
+      type: 'identity',
       input: userRequest,
-      assignedAgent: getAgent('strategist')?.id || '',
+      assignedAgent: getAgentId('identity', 'writer'),
       status: 'pending',
+      dependencies: [plannerTask.id],
     };
-    
-    subtasks.push(hookTask, strategyTask);
-    parallelGroups.push([hookTask.id, strategyTask.id]);
-    
-    // Phase 2: Body writing (depends on hook)
-    const bodyTask: SubTask = {
+
+    const rulesTask: SubTask = {
       id: generateId(),
-      type: 'body',
+      type: 'rules',
       input: userRequest,
-      assignedAgent: getAgent('writer')?.id || '',
+      assignedAgent: getAgentId('rules', 'strategist'),
       status: 'pending',
-      dependencies: [hookTask.id],
+      dependencies: [identityTask.id],
     };
-    subtasks.push(bodyTask);
-    parallelGroups.push([bodyTask.id]);
-    
-    // Phase 3: Critique + Hashtags (parallel, depends on body)
-    const critiqueTask: SubTask = {
+
+    const structureTask: SubTask = {
+      id: generateId(),
+      type: 'structure',
+      input: userRequest,
+      assignedAgent: getAgentId('structure', 'strategist'),
+      status: 'pending',
+      dependencies: [rulesTask.id],
+    };
+
+    const generatorTask: SubTask = {
+      id: generateId(),
+      type: 'generator',
+      input: userRequest,
+      assignedAgent: getAgentId('generator', 'writer'),
+      status: 'pending',
+      dependencies: [structureTask.id],
+    };
+
+    const visualTask: SubTask = {
+      id: generateId(),
+      type: 'visual',
+      input: userRequest,
+      assignedAgent: getAgentId('visual'),
+      status: 'pending',
+      dependencies: [generatorTask.id],
+    };
+
+    const distributionTask: SubTask = {
+      id: generateId(),
+      type: 'distribution',
+      input: userRequest,
+      assignedAgent: getAgentId('distribution', 'hashtag'),
+      status: 'pending',
+      dependencies: [generatorTask.id],
+    };
+
+    const criticTask: SubTask = {
       id: generateId(),
       type: 'critique',
-      input: '',
-      assignedAgent: getAgent('critic')?.id || '',
+      input: userRequest,
+      assignedAgent: getAgentId('critic'),
       status: 'pending',
-      dependencies: [bodyTask.id],
+      dependencies: [distributionTask.id, visualTask.id],
     };
-    
-    const hashtagTask: SubTask = {
-      id: generateId(),
-      type: 'hashtag',
-      input: '',
-      assignedAgent: getAgent('hashtag')?.id || '',
-      status: 'pending',
-      dependencies: [bodyTask.id],
-    };
-    
-    subtasks.push(critiqueTask, hashtagTask);
-    parallelGroups.push([critiqueTask.id, hashtagTask.id]);
-    
-    // Phase 4: Optimization (depends on critique)
-    const optimizeTask: SubTask = {
-      id: generateId(),
-      type: 'optimize',
-      input: '',
-      assignedAgent: getAgent('optimizer')?.id || '',
-      status: 'pending',
-      dependencies: [critiqueTask.id],
-    };
-    subtasks.push(optimizeTask);
-    parallelGroups.push([optimizeTask.id]);
+
+    subtasks.push(
+      plannerTask,
+      identityTask,
+      rulesTask,
+      structureTask,
+      generatorTask,
+      visualTask,
+      distributionTask,
+      criticTask
+    );
+    parallelGroups.push(
+      [plannerTask.id],
+      [identityTask.id],
+      [rulesTask.id],
+      [structureTask.id],
+      [generatorTask.id],
+      [visualTask.id, distributionTask.id],
+      [criticTask.id]
+    );
+
+    if (requestType === 'full') {
+      const memoryTask: SubTask = {
+        id: generateId(),
+        type: 'memory',
+        input: userRequest,
+        assignedAgent: getAgentId('memory', 'strategist'),
+        status: 'pending',
+        dependencies: [generatorTask.id],
+      };
+      const trendTask: SubTask = {
+        id: generateId(),
+        type: 'trend',
+        input: userRequest,
+        assignedAgent: getAgentId('trend', 'engagement'),
+        status: 'pending',
+        dependencies: [generatorTask.id],
+      };
+      subtasks.push(memoryTask, trendTask);
+      parallelGroups.splice(6, 0, [memoryTask.id, trendTask.id]);
+    }
   } else if (requestType === 'strategy') {
     const strategyTask: SubTask = {
       id: generateId(),
       type: 'strategy',
       input: userRequest,
-      assignedAgent: getAgent('strategist')?.id || '',
+      assignedAgent: getAgentId('planner', 'strategist'),
       status: 'pending',
     };
     subtasks.push(strategyTask);
@@ -598,7 +880,7 @@ export async function createOrchestrationPlan(
     userRequest,
     subtasks,
     parallelGroups,
-    aggregationStrategy: requestType === 'full' ? 'combine' : 'best_score',
+    aggregationStrategy: requestType === 'strategy' ? 'best_score' : 'combine',
     status: 'planning',
     createdAt: new Date().toISOString(),
   };
@@ -712,6 +994,33 @@ export function selectBestOutput(outputs: AgentOutput[]): AgentOutput | null {
 export function combineOutputs(outputs: AgentOutput[], strategy: 'merge' | 'sections'): string {
   if (outputs.length === 0) return '';
   if (outputs.length === 1) return outputs[0].content;
+
+  const bestByRole = (role: AgentRole): AgentOutput | undefined =>
+    outputs
+      .filter((output) => output.agentRole === role && output.content.trim().length > 0)
+      .sort((a, b) => b.score - a.score)[0];
+
+  const planner = bestByRole('planner');
+  const identity = bestByRole('identity');
+  const rules = bestByRole('rules');
+  const structure = bestByRole('structure');
+  const generator = bestByRole('generator') || bestByRole('writer');
+  const visual = bestByRole('visual');
+  const distribution = bestByRole('distribution') || bestByRole('hashtag');
+  const critic = bestByRole('critic');
+
+  if (planner || identity || rules || structure || generator || distribution || visual || critic) {
+    const sections: string[] = [];
+    if (planner?.content) sections.push(`Execution Plan\n${planner.content}`);
+    if (identity?.content) sections.push(`Identity\n${identity.content}`);
+    if (rules?.content) sections.push(`Rules\n${rules.content}`);
+    if (structure?.content) sections.push(`Structure\n${structure.content}`);
+    if (generator?.content) sections.push(`Content\n${generator.content}`);
+    if (visual?.content) sections.push(`Visual Prompts\n${visual.content}`);
+    if (distribution?.content) sections.push(`Captions & Distribution\n${distribution.content}`);
+    if (critic?.content) sections.push(`Critic Verdict\n${critic.content}`);
+    if (sections.length > 0) return sections.join('\n\n');
+  }
   
   if (strategy === 'sections') {
     return outputs.map(o => `[${o.agentRole.toUpperCase()}]\n${o.content}`).join('\n\n');

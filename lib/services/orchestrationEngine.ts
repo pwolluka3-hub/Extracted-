@@ -57,6 +57,27 @@ export interface OrchestrationOptions {
   skipGovernor?: boolean;
 }
 
+const CRITIC_REJECT_PATTERN = /(?:^|\n)\s*(?:verdict|final verdict)\s*:\s*reject\b/i;
+const ROLE_CONTEXT_KEY: Record<AgentOutput['agentRole'], string> = {
+  planner: 'executionPlan',
+  identity: 'identity',
+  rules: 'rules',
+  structure: 'structure',
+  generator: 'content',
+  distribution: 'distribution',
+  memory: 'memoryNotes',
+  trend: 'trendInsights',
+  writer: 'content',
+  hook: 'hook',
+  strategist: 'strategy',
+  optimizer: 'optimizedContent',
+  critic: 'critique',
+  visual: 'visualPrompt',
+  hashtag: 'hashtags',
+  engagement: 'engagementInsights',
+  hybrid: 'hybridOutput',
+};
+
 // Initialize the system
 export async function initializeOrchestrationSystem(): Promise<void> {
   // Initialize agents if not already done
@@ -144,6 +165,11 @@ export async function orchestrate(
       },
       aiProvider
     );
+
+    if (result.criticRejected && regenerations < maxRegenerations) {
+      regenerations++;
+      continue;
+    }
     
     // Validate with governor
     const validation = await validateContent(result.combinedContent, {
@@ -262,6 +288,8 @@ async function executeOrchestrationPlan(
 ): Promise<{
   outputs: AgentOutput[];
   combinedContent: string;
+  criticRejected: boolean;
+  criticFeedback: string;
 }> {
   const outputs: AgentOutput[] = [];
   const taskOutputs: Map<string, AgentOutput> = new Map();
@@ -311,13 +339,8 @@ async function executeOrchestrationPlan(
         for (const depId of task.dependencies) {
           const depOutput = taskOutputs.get(depId);
           if (depOutput) {
-            if (depOutput.agentRole === 'hook') {
-              taskContext.hook = depOutput.content;
-            } else if (depOutput.agentRole === 'writer') {
-              taskContext.content = depOutput.content;
-            } else if (depOutput.agentRole === 'critic') {
-              taskContext.critique = depOutput.content;
-            }
+            const contextKey = ROLE_CONTEXT_KEY[depOutput.agentRole];
+            taskContext[contextKey] = depOutput.content;
           }
         }
       }
@@ -377,7 +400,13 @@ async function executeOrchestrationPlan(
       combinedContent = outputs.map(o => o.content).join('\n\n');
   }
   
-  return { outputs, combinedContent };
+  const criticOutput = outputs
+    .filter((output) => output.agentRole === 'critic')
+    .sort((a, b) => b.score - a.score)[0];
+  const criticFeedback = criticOutput?.content || '';
+  const criticRejected = Boolean(criticFeedback) && CRITIC_REJECT_PATTERN.test(criticFeedback);
+
+  return { outputs, combinedContent, criticRejected, criticFeedback };
 }
 
 // Quick content generation (single agent, fast path)

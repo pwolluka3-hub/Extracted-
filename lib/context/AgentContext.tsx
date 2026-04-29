@@ -71,6 +71,21 @@ const AUTOMATION_STOP_PATTERN = /\b(stop|pause|halt|disable)\b.*\b(automation|au
 const WEAK_CONTENT_BRIEF_PATTERN = /^(create|make|generate|write)\s+(content|post|caption|image|video|reel|short|script)\b[.!?]*$/i;
 const GENERIC_IDEA_PATTERN = /\b(something|anything|whatever|random|any niche)\b/i;
 const SIMPLE_GREETING_PATTERN = /^(?:hi|hello|hey|yo|sup|what(?:'| i)?s up|good (?:morning|afternoon|evening))[\s!.?]*$/i;
+const FILE_ANALYSIS_CUE_PATTERN = /\b(analy[sz]e|review|read|extract|summari[sz]e|parse|transcribe|use this (?:pdf|file|document)|from this (?:pdf|file|document)|what(?:'| i)?s in (?:this|the) (?:pdf|file|document))\b/i;
+const DETAIL_HANDOFF_PATTERN = /\b(i(?:\s+am|'m)?\s+(?:going to|gonna)|i(?:'| a)?ll|let me|about to)\s+(?:give|share|send|provide)\b.*\b(detail|description|brief|profile|context|info)\b/i;
+const SCENE_REQUEST_PATTERN = /\b(scene|storyboard|shot list|cinematic scene|loop[- ]friendly|camera movement)\b/i;
+const FILE_CONTEXT_LIMIT = 12_000;
+const PAGE_BLOCK_PATTERN = /\[Page \d+\][\s\S]*?(?=\n\n\[Page \d+\]|$)/g;
+const UNIVERSAL_SCENE_DIRECTIVE = [
+  'Scene generation constraints:',
+  '- Keep mystery over explanation; never explain rituals, lore, or magic systems.',
+  '- Keep focus on the requested focal character; do not add unnecessary new characters.',
+  '- Include one disturbing anomaly in each scene.',
+  '- Keep dialogue minimal or none.',
+  '- Use camera movement and cinematic beat progression.',
+  '- End each scene abruptly for loop-friendly playback.',
+  '- If a scene feels safe or generic, regenerate before returning.',
+].join('\n');
 const COMMAND_PLATFORM_SET = new Set<Platform>([
   'twitter',
   'instagram',
@@ -158,6 +173,76 @@ function needsExecutionClarification(
 
 function isSimpleGreeting(message: string): boolean {
   return SIMPLE_GREETING_PATTERN.test(message.trim());
+}
+
+function wantsFileAnalysis(message: string): boolean {
+  const normalized = message.trim();
+  if (!normalized) return true;
+  return FILE_ANALYSIS_CUE_PATTERN.test(normalized);
+}
+
+function isDetailHandoff(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) return false;
+  if (!DETAIL_HANDOFF_PATTERN.test(normalized)) return false;
+  return /\b(character|major character|main character|brand|niche|audience|idea|story)\b/i.test(normalized);
+}
+
+function isSceneRequest(message: string): boolean {
+  return SCENE_REQUEST_PATTERN.test(message.trim().toLowerCase());
+}
+
+function buildFileContextPreview(text: string): string {
+  const normalized = text.trim();
+  if (!normalized) return '';
+  if (normalized.length <= FILE_CONTEXT_LIMIT) return normalized;
+
+  const pageBlocks = normalized.match(PAGE_BLOCK_PATTERN);
+  if (pageBlocks && pageBlocks.length > 0) {
+    const snippets: string[] = [];
+    const maxSnippets = Math.max(1, Math.floor(FILE_CONTEXT_LIMIT / 520));
+    const step = Math.max(1, Math.floor(pageBlocks.length / maxSnippets));
+    let budget = FILE_CONTEXT_LIMIT;
+    for (let index = 0; index < pageBlocks.length; index += step) {
+      const block = pageBlocks[index];
+      if (budget < 180) break;
+      const titleMatch = block.match(/^\[Page \d+\]/);
+      const title = titleMatch?.[0] || '[Page]';
+      const pageBody = block.replace(/^\[Page \d+\]\s*/, '').trim();
+      const maxBody = Math.min(420, Math.max(120, budget - title.length - 40));
+      const excerpt = pageBody.slice(0, maxBody);
+      const snippet = `${title}\n${excerpt}${pageBody.length > maxBody ? ' …' : ''}`;
+      if (snippet.length > budget) break;
+      snippets.push(snippet);
+      budget -= snippet.length + 2;
+    }
+    const lastBlock = pageBlocks[pageBlocks.length - 1];
+    const alreadyHasLast = snippets.some((snippet) => snippet.startsWith(`[Page ${pageBlocks.length}]`));
+    if (!alreadyHasLast && lastBlock && budget > 180) {
+      const lastBody = lastBlock.replace(/^\[Page \d+\]\s*/, '').trim();
+      const lastSnippet = `[Page ${pageBlocks.length}]\n${lastBody.slice(0, Math.min(320, budget - 24))}${lastBody.length > Math.min(320, budget - 24) ? ' …' : ''}`;
+      snippets.push(lastSnippet);
+    }
+    if (snippets.length > 0) {
+      return `Document is long. Page-by-page excerpts are included below to preserve coverage.\n\n${snippets.join('\n\n')}`;
+    }
+  }
+
+  const segment = Math.floor(FILE_CONTEXT_LIMIT / 3);
+  const middleStart = Math.max(0, Math.floor(normalized.length / 2) - Math.floor(segment / 2));
+  const start = normalized.slice(0, segment);
+  const middle = normalized.slice(middleStart, middleStart + segment);
+  const end = normalized.slice(-segment);
+
+  return [
+    `Document is long (${normalized.length} characters). Excerpts from start, middle, and end are included for full-range coverage.`,
+    '[Start]',
+    start,
+    '[Middle]',
+    middle,
+    '[End]',
+    end,
+  ].join('\n\n');
 }
 
 function buildGreetingReply(): string {
@@ -271,7 +356,7 @@ interface AgentContextType extends AgentState {
 
 interface AgentSessionSnapshot {
   messages: ChatMessage[];
-  pendingFiles: AttachedFile[];
+  pendingFiles?: AttachedFile[];
   godModeEnabled: boolean;
   currentModel: string;
   currentImageProvider: ImageProvider;
@@ -321,7 +406,6 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const saveSessionSnapshot = useCallback(async (nextState: AgentState) => {
     const snapshot: AgentSessionSnapshot = {
       messages: nextState.messages.slice(-100),
-      pendingFiles: nextState.pendingFiles,
       godModeEnabled: nextState.godModeEnabled,
       currentModel: nextState.currentModel,
       currentImageProvider: nextState.currentImageProvider,
@@ -366,7 +450,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       setState(s => ({
         ...s,
         messages: sessionSnapshot?.messages?.length ? sessionSnapshot.messages : (history.length > 0 ? history : s.messages),
-        pendingFiles: sessionSnapshot?.pendingFiles || s.pendingFiles,
+        pendingFiles: [],
         godModeEnabled: sessionSnapshot?.godModeEnabled ?? s.godModeEnabled,
         currentModel: sessionSnapshot?.currentModel || savedModel || s.currentModel,
         currentImageProvider:
@@ -409,7 +493,6 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     void saveSessionSnapshot(state);
   }, [
     state.messages,
-    state.pendingFiles,
     state.godModeEnabled,
     state.currentModel,
     state.currentImageProvider,
@@ -594,7 +677,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     const trimmedMessage = message.trim();
     const lowerMessage = trimmedMessage.toLowerCase();
     const explicitExecutionRequested = isExplicitExecutionRequest(trimmedMessage);
-    const explicitGenerationPattern = /\b(create content|make content|write (a|an)? ?post|write captions?|create posts?|turn this into content|use this pdf|make posts? from|create reels?|create shorts?|generate content|caption for|script for|turn this into posts?|create a caption|make a reel|make a video script)\b/;
+    const explicitGenerationPattern = /\b(create content|make content|write (a|an)? ?post|write captions?|create posts?|turn this into content|use this pdf|make posts? from|create reels?|create shorts?|generate content|caption for|script for|turn this into posts?|create a caption|make a reel|make a video script|create scenes?|generate scenes?|scene breakdown|storyboard)\b/;
     const softIdeaPattern = /\b(content idea|post idea)\b/;
     const nichePattern = /\b(niche|nich)\s*(is|:|=)\b/;
     const regeneratePattern = /\b(regenerate|redo|try again|another version|improve this|make it more realistic|make it better|fix this image|fix this video)\b/;
@@ -612,7 +695,10 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     }
 
     if (hasFiles) {
-      return { type: 'read_file', confidence: 0.95, params: {} };
+      if (wantsFileAnalysis(trimmedMessage)) {
+        return { type: 'read_file', confidence: 0.95, params: {} };
+      }
+      return { type: 'answer_question', confidence: 0.82, params: { hasFileContext: true } };
     }
 
     if (softIdeaPattern.test(lowerMessage)) {
@@ -1008,9 +1094,15 @@ Rules:
             { type: file.mimeType }
           );
 
-          const result = await fileProcessor.processFile(browserFile, FILE_ANALYSIS_PROMPT.replace('{fileType}', 'file'));
-          const extractedText = result.file.extractedText?.slice(0, 4000);
-          const body = result.aiResponse || result.file.summary || extractedText;
+          const result = await fileProcessor.processFile(
+            browserFile,
+            FILE_ANALYSIS_PROMPT.replace('{fileType}', 'file'),
+            { skipAiSummary: true }
+          );
+          const extractedText = result.file.extractedText
+            ? buildFileContextPreview(result.file.extractedText)
+            : '';
+          const body = extractedText || result.aiResponse || result.file.summary;
 
           if (body) {
             summaries.push(`[File: ${file.name}]\n${body}`);
@@ -1214,8 +1306,10 @@ Rules:
       pendingFiles: [],
     }));
 
-    // Save user message
-    await saveChatMessage(userMessage);
+    // Save user message without blocking response time
+    void saveChatMessage(userMessage).catch((error) => {
+      console.error('Failed to persist user message:', error);
+    });
 
     let trackedGenerationId: string | null = null;
     try {
@@ -1358,6 +1452,13 @@ Rules:
         return;
       }
 
+      if (attachedFiles.length === 0 && isDetailHandoff(normalizedContent)) {
+        await postCommandResponse(
+          'Send the details now and I will save them to memory. Include: name, role, appearance, personality, backstory, and goals.'
+        );
+        return;
+      }
+
       // Detect intent
       const intent = await detectIntent(normalizedContent, attachedFiles.length > 0);
       setState(s => ({ ...s, currentTask: `${intent.type.replace('_', ' ')}...` }));
@@ -1444,6 +1545,9 @@ Rules:
       
       if (fileContext) {
         userPrompt = `${normalizedContent}\n\n--- Attached Files ---\n${fileContext}`;
+      }
+      if (isSceneRequest(normalizedContent)) {
+        userPrompt = `${userPrompt}\n\n${UNIVERSAL_SCENE_DIRECTIVE}`;
       }
 
       const memorySnapshot = await loadAgentMemory();
@@ -1726,6 +1830,9 @@ Rules:
         userPrompt += '\n\nTreat this as setup context unless the user explicitly asks you to generate content. Respond naturally, confirm you have the idea/context, and ask one concise follow-up only if needed.';
       } else if (intent.type === 'answer_question') {
         userPrompt += '\n\nKeep this conversational and natural. For casual chat, reply in 1-2 human sentences and avoid canned assistant lines like "How can I assist you today?" or "If you need anything, let me know." Do not auto-generate posts, scripts, images, or videos unless the user explicitly requests execution.';
+        if (isDetailHandoff(normalizedContent)) {
+          userPrompt += '\n\nThe user is about to share details. Ask one concise follow-up requesting those details now, then confirm you will save them.';
+        }
       }
 
       activeModel = await resolveExecutionModel(

@@ -211,6 +211,12 @@ const ROBOTIC_PATTERNS = [
   /\bholistic\b/i,
 ];
 
+const SCENE_LIKE_PATTERN = /\b(scene\s*\d+|scene-based|storyboard|shot list|cinematic scene|loop[- ]friendly)\b/i;
+const SCENE_LORE_EXPLANATION_PATTERN = /\b(ancient incantation|incantation|ritual|magic system|lore|legend says|explains? (?:why|how)|because of the curse)\b/i;
+const SCENE_ANOMALY_PATTERN = /\b(anomaly|glitch|impossible|unnatural|disturbing|unsettling|flicker|shadow moves|mirror|time skip|wrong face|void)\b/i;
+const SCENE_CAMERA_PATTERN = /\b(camera|close[- ]up|wide shot|tracking|dolly|pan|tilt|push[- ]in|pull[- ]back|crane|handheld|rack focus)\b/i;
+const SCENE_SAFE_PATTERN = /\b(safe|normal|everything is fine|peaceful|calm and quiet)\b/i;
+
 function inferMoodFromText(content: string): MusicMood {
   const lower = content.toLowerCase();
   const moodScore = {
@@ -447,6 +453,62 @@ export async function validateContent(
     });
     score -= 5;
     suggestions.push('Add emotional triggers or direct reader engagement');
+  }
+
+  // Scene-generation policy checks
+  const looksSceneBased = SCENE_LIKE_PATTERN.test(content);
+  if (looksSceneBased) {
+    if (SCENE_LORE_EXPLANATION_PATTERN.test(content)) {
+      issues.push({
+        type: 'quality',
+        severity: 'error',
+        message: 'Scene output explains lore/magic instead of preserving uncertainty',
+      });
+      score -= 18;
+      suggestions.push('Remove lore explanations and keep mystery unresolved');
+    }
+
+    if (!SCENE_ANOMALY_PATTERN.test(content)) {
+      issues.push({
+        type: 'quality',
+        severity: 'error',
+        message: 'Scene output is missing a disturbing anomaly',
+      });
+      score -= 18;
+      suggestions.push('Add one specific disturbing anomaly per scene');
+    }
+
+    if (!SCENE_CAMERA_PATTERN.test(content)) {
+      issues.push({
+        type: 'quality',
+        severity: 'error',
+        message: 'Scene output is missing cinematic camera movement structure',
+      });
+      score -= 14;
+      suggestions.push('Use explicit camera movement and shot progression');
+    }
+
+    const spokenLines = (content.match(/["“][^"”]{12,}["”]/g) || []).length
+      + (content.match(/(?:^|\n)\s*[A-Za-z][A-Za-z0-9 _-]{0,24}:\s+/gm) || []).length;
+    if (spokenLines > 2) {
+      issues.push({
+        type: 'quality',
+        severity: 'warning',
+        message: 'Scene dialogue is too heavy; keep dialogue minimal',
+      });
+      score -= 8;
+      suggestions.push('Reduce dialogue and rely on visual beats');
+    }
+
+    if (SCENE_SAFE_PATTERN.test(content)) {
+      issues.push({
+        type: 'generic',
+        severity: 'error',
+        message: 'Scene reads too safe/normal; needs stronger tension',
+      });
+      score -= 12;
+      suggestions.push('Increase tension and end abruptly on an unresolved beat');
+    }
   }
   
   // 7. Platform-specific checks
