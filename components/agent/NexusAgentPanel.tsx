@@ -2,7 +2,7 @@
 
 import { useAgent } from '@/lib/context/AgentContext';
 import { cn } from '@/lib/utils';
-import { useRef, useEffect, useState, type FormEvent, type ChangeEvent } from 'react';
+import { useRef, useEffect, useLayoutEffect, useState, useCallback, type FormEvent, type ChangeEvent } from 'react';
 import { GlassCard } from '@/components/nexus/GlassCard';
 import { 
   X, Send, Paperclip, Trash2, Brain, Zap, 
@@ -266,9 +266,19 @@ export function NexusAgentPanel() {
   const [input, setInput] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [disablePuterFallback, setDisablePuterFallback] = useState(false);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
+    const container = messagesContainerRef.current;
+    if (container) {
+      container.scrollTo({ top: container.scrollHeight, behavior });
+    } else {
+      messagesEndRef.current?.scrollIntoView({ behavior, block: 'end' });
+    }
+  }, []);
 
   // Voice recognition setup
   useEffect(() => {
@@ -290,17 +300,48 @@ export function NexusAgentPanel() {
     }
   }, [isVoiceMode, sendMessage, startListening, stopListening]);
 
-  // Scroll to bottom when messages change
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isThinking]);
+  // Keep the latest message in view whenever the panel opens or message count changes
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    scrollMessagesToBottom('auto');
+  }, [isOpen, messages.length, isThinking, scrollMessagesToBottom]);
 
-  // Focus input when panel opens
+  // Media assets can expand after initial render; keep the viewport pinned to latest content.
   useEffect(() => {
-    if (isOpen && !isVoiceMode) {
-      setTimeout(() => inputRef.current?.focus(), 300);
+    if (!isOpen) return;
+
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    const handleMediaLoad = (event: Event) => {
+      const target = event.target;
+      if (target instanceof HTMLImageElement || target instanceof HTMLVideoElement) {
+        scrollMessagesToBottom('auto');
+      }
+    };
+
+    container.addEventListener('load', handleMediaLoad, true);
+    return () => {
+      container.removeEventListener('load', handleMediaLoad, true);
+    };
+  }, [isOpen, messages.length, scrollMessagesToBottom]);
+
+  // Focus input when panel opens and force a couple of delayed bottom snaps during panel transition.
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const timers: number[] = [];
+    if (!isVoiceMode) {
+      timers.push(window.setTimeout(() => inputRef.current?.focus(), 300));
     }
-  }, [isOpen, isVoiceMode]);
+    timers.push(window.setTimeout(() => scrollMessagesToBottom('auto'), 0));
+    timers.push(window.setTimeout(() => scrollMessagesToBottom('auto'), 160));
+    timers.push(window.setTimeout(() => scrollMessagesToBottom('auto'), 360));
+
+    return () => {
+      timers.forEach((timerId) => window.clearTimeout(timerId));
+    };
+  }, [isOpen, isVoiceMode, scrollMessagesToBottom]);
 
   // Auto-speak responses in voice mode
   useEffect(() => {
@@ -564,7 +605,7 @@ export function NexusAgentPanel() {
         )}
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar px-4 py-4 space-y-4">
+        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto custom-scrollbar px-4 py-4 space-y-4">
           {messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center px-4">
               <div className={cn(
