@@ -32,6 +32,7 @@ import {
 import { loadBrandKit } from './memoryService';
 import { buildMemoryContext } from './agentMemoryService';
 import { universalChat } from './aiService';
+import { parseCriticVerdict } from './orchestrationPrimitives';
 
 // Orchestration Types
 export interface OrchestrationResult {
@@ -404,7 +405,19 @@ async function executeOrchestrationPlan(
     .filter((output) => output.agentRole === 'critic')
     .sort((a, b) => b.score - a.score)[0];
   const criticFeedback = criticOutput?.content || '';
-  const criticRejected = Boolean(criticFeedback) && CRITIC_REJECT_PATTERN.test(criticFeedback);
+  const criticVerdict = parseCriticVerdict(criticFeedback);
+
+  if (criticOutput) {
+    criticOutput.metadata = {
+      ...criticOutput.metadata,
+      criticVerdict,
+      criticSchemaValid: criticVerdict.schemaValid,
+    };
+  }
+
+  const criticRejected = criticFeedback
+    ? !criticVerdict.schemaValid || criticVerdict.verdict === 'reject' || CRITIC_REJECT_PATTERN.test(criticFeedback)
+    : true;
 
   return { outputs, combinedContent, criticRejected, criticFeedback };
 }

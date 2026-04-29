@@ -4,6 +4,8 @@ import { aiService } from './aiService';
 
 // PDF.js will be loaded dynamically
 let pdfjsLib: typeof import('pdfjs-dist') | null = null;
+const PDF_OCR_MIN_TEXT_LENGTH = 180;
+const PDF_OCR_MAX_PAGES = 4;
 
 export type FileType = 'image' | 'document' | 'audio' | 'video' | 'data' | 'url' | 'html' | 'code' | 'unknown';
 
@@ -105,9 +107,66 @@ async function extractPDFText(base64Data: string): Promise<string> {
       textParts.push(`[Page ${i}]\n${pageText.trim()}`);
     }
 
-    return textParts.join('\n\n');
+    const extracted = textParts.join('\n\n').trim();
+    const compactLength = extracted.replace(/\s+/g, '').length;
+
+    // OCR fallback for scanned PDFs or text-layer failures.
+    if (compactLength < PDF_OCR_MIN_TEXT_LENGTH) {
+      const visionOcr = await extractPDFTextWithVision(pdf, Math.min(pdf.numPages, PDF_OCR_MAX_PAGES));
+      if (visionOcr.trim()) {
+        return visionOcr.trim();
+      }
+    }
+
+    return extracted;
   } catch (error) {
     console.error('PDF extraction error:', error);
+    return '';
+  }
+}
+
+async function renderPdfPageToDataUrl(
+  pdf: any,
+  pageNumber: number
+): Promise<string | null> {
+  if (typeof document === 'undefined') return null;
+
+  const page = await pdf.getPage(pageNumber);
+  const viewport = page.getViewport({ scale: 1.8 });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
+  const context = canvas.getContext('2d');
+  if (!context) return null;
+
+  await page.render({ canvasContext: context, viewport }).promise;
+  return canvas.toDataURL('image/png');
+}
+
+async function extractPDFTextWithVision(
+  pdf: any,
+  maxPages: number
+): Promise<string> {
+  try {
+    const blocks: string[] = [];
+    for (let pageNumber = 1; pageNumber <= maxPages; pageNumber++) {
+      const imageUrl = await renderPdfPageToDataUrl(pdf, pageNumber);
+      if (!imageUrl) continue;
+
+      const ocrPrompt = `Transcribe all visible text from this document page exactly.
+Return plain text only.
+Do not summarize.
+Do not add explanation.
+Preserve names, numbers, and wording exactly as shown.`;
+
+      const text = await aiService.chatWithVision(ocrPrompt, imageUrl);
+      if (text && text.trim()) {
+        blocks.push(`[Page ${pageNumber} OCR]\n${text.trim()}`);
+      }
+    }
+    return blocks.join('\n\n');
+  } catch (error) {
+    console.warn('PDF OCR fallback failed:', error);
     return '';
   }
 }

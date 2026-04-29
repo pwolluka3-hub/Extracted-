@@ -43,6 +43,7 @@ import { fileProcessor } from '@/lib/services/fileProcessor';
 import type { VideoProvider } from '@/lib/services/videoGenerationService';
 import type { ImageProvider } from '@/lib/services/imageGenerationService';
 import { generateContent } from '@/lib/services/contentEngine';
+import { runUniversalContentPipeline } from '@/lib/services/universalContentEngine';
 import type { Platform } from '@/lib/types';
 import { loadProviderCapabilities, getRecommendedModel, type ProviderCapability } from '@/lib/services/providerCapabilityService';
 import { trackGenerationFailure, trackGenerationStart, trackGenerationSuccess } from '@/lib/services/generationTrackerService';
@@ -74,6 +75,7 @@ const SIMPLE_GREETING_PATTERN = /^(?:hi|hello|hey|yo|sup|what(?:'| i)?s up|good 
 const FILE_ANALYSIS_CUE_PATTERN = /\b(analy[sz]e|review|read|extract|summari[sz]e|parse|transcribe|use this (?:pdf|file|document)|from this (?:pdf|file|document)|what(?:'| i)?s in (?:this|the) (?:pdf|file|document))\b/i;
 const DETAIL_HANDOFF_PATTERN = /\b(i(?:\s+am|'m)?\s+(?:going to|gonna)|i(?:'| a)?ll|let me|about to)\s+(?:give|share|send|provide)\b.*\b(detail|description|brief|profile|context|info)\b/i;
 const SCENE_REQUEST_PATTERN = /\b(scene|storyboard|shot list|cinematic scene|loop[- ]friendly|camera movement)\b/i;
+const UNIVERSAL_PIPELINE_PATTERN = /\b(multimodal|text\s*\+\s*image|image\s*\+\s*video|voice|music|sound design|final mix|production pipeline|full stack)\b/i;
 const FILE_CONTEXT_LIMIT = 12_000;
 const PAGE_BLOCK_PATTERN = /\[Page \d+\][\s\S]*?(?=\n\n\[Page \d+\]|$)/g;
 const UNIVERSAL_SCENE_DIRECTIVE = [
@@ -86,6 +88,7 @@ const UNIVERSAL_SCENE_DIRECTIVE = [
   '- End each scene abruptly for loop-friendly playback.',
   '- If a scene feels safe or generic, regenerate before returning.',
 ].join('\n');
+const AGENT_LATENCY_EVENT_NAME = 'nexus:agent-latency';
 const COMMAND_PLATFORM_SET = new Set<Platform>([
   'twitter',
   'instagram',
@@ -192,6 +195,10 @@ function isSceneRequest(message: string): boolean {
   return SCENE_REQUEST_PATTERN.test(message.trim().toLowerCase());
 }
 
+function wantsUniversalPipeline(message: string): boolean {
+  return UNIVERSAL_PIPELINE_PATTERN.test(message.trim().toLowerCase());
+}
+
 function buildFileContextPreview(text: string): string {
   const normalized = text.trim();
   if (!normalized) return '';
@@ -253,6 +260,23 @@ function buildGreetingReply(): string {
   ];
   const index = Math.abs(Date.now()) % options.length;
   return options[index];
+}
+
+function emitAgentLatency(stage: string, durationMs: number, metadata: Record<string, unknown> = {}): void {
+  const detail = {
+    stage,
+    durationMs,
+    timestamp: new Date().toISOString(),
+    ...metadata,
+  };
+  try {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(AGENT_LATENCY_EVENT_NAME, { detail }));
+    }
+  } catch {
+    // Ignore telemetry event dispatch failures
+  }
+  console.info('[AgentLatency]', detail);
 }
 
 type AgentCommand =
@@ -1460,7 +1484,12 @@ Rules:
       }
 
       // Detect intent
+      const intentStart = Date.now();
       const intent = await detectIntent(normalizedContent, attachedFiles.length > 0);
+      emitAgentLatency('intent_detection', Date.now() - intentStart, {
+        intent: intent.type,
+        hasFiles: attachedFiles.length > 0,
+      });
       setState(s => ({ ...s, currentTask: `${intent.type.replace('_', ' ')}...` }));
 
       const automationStopRequested = AUTOMATION_STOP_PATTERN.test(normalizedContent);
@@ -1535,7 +1564,12 @@ Rules:
       let fileContext = '';
       if (attachedFiles.length > 0) {
         setState(s => ({ ...s, currentTask: 'Analyzing files...' }));
+        const fileStart = Date.now();
         fileContext = await processFiles(attachedFiles);
+        emitAgentLatency('file_processing', Date.now() - fileStart, {
+          fileCount: attachedFiles.length,
+          contextChars: fileContext.length,
+        });
       }
 
       // Build the full prompt with memory context
@@ -1601,9 +1635,14 @@ Rules:
         trackedGenerationId = tracked.record.id;
 
         setState(s => ({ ...s, currentTask: 'Generating image...' }));
+        const imageGenerationStart = Date.now();
         const imageResult = await generateAgentImage(userPrompt, {
           preferredModel: activeModel,
           provider: state.currentImageProvider,
+        });
+        emitAgentLatency('image_generation', Date.now() - imageGenerationStart, {
+          provider: state.currentImageProvider,
+          model: activeModel,
         });
         const approvedContent = await enforceGovernorApproval(imageResult.content, {
           brandKit,
@@ -1653,9 +1692,14 @@ Rules:
           trackedGenerationId = tracked.record.id;
 
           setState(s => ({ ...s, currentTask: 'Regenerating image...' }));
+          const regenerateImageStart = Date.now();
           const imageResult = await generateAgentImage(regenerationPrompt, {
             preferredModel: activeModel,
             provider: state.currentImageProvider,
+          });
+          emitAgentLatency('image_regeneration', Date.now() - regenerateImageStart, {
+            provider: state.currentImageProvider,
+            model: activeModel,
           });
           const approvedContent = await enforceGovernorApproval(imageResult.content, {
             brandKit,
@@ -1696,9 +1740,14 @@ Rules:
         trackedGenerationId = tracked.record.id;
 
         setState(s => ({ ...s, currentTask: 'Regenerating video...' }));
+        const regenerateVideoStart = Date.now();
         const videoResult = await generateAgentVideo(regenerationPrompt, {
           preferredModel: activeModel,
           provider: state.currentVideoProvider,
+        });
+        emitAgentLatency('video_regeneration', Date.now() - regenerateVideoStart, {
+          provider: state.currentVideoProvider,
+          model: activeModel,
         });
         const approvedContent = await enforceGovernorApproval(videoResult.content, {
           brandKit,
@@ -1740,9 +1789,14 @@ Rules:
         trackedGenerationId = tracked.record.id;
 
         setState(s => ({ ...s, currentTask: 'Generating video...' }));
+        const videoGenerationStart = Date.now();
         const videoResult = await generateAgentVideo(userPrompt, {
           preferredModel: activeModel,
           provider: state.currentVideoProvider,
+        });
+        emitAgentLatency('video_generation', Date.now() - videoGenerationStart, {
+          provider: state.currentVideoProvider,
+          model: activeModel,
         });
         const approvedContent = await enforceGovernorApproval(videoResult.content, {
           brandKit,
@@ -1784,20 +1838,77 @@ Rules:
           platforms,
         });
         trackedGenerationId = tracked.record.id;
-        const generated = await generateContent({
-          idea: fileContext ? `${normalizedContent}\n\nSource material:\n${fileContext}` : normalizedContent,
-          platforms,
-          customInstructions: 'Do the work directly. Return finished, platform-native social content instead of advice about what to create. Start with a stop-scroll hook and keep it aligned to the locked niche.',
-        }, brandKit);
+        const contentGenerationStart = Date.now();
+        const shouldRunUniversalPipeline = wantsUniversalPipeline(normalizedContent);
+        let generatedResponse: string;
 
-        const generatedResponse = await enforceGovernorApproval(
-          formatGeneratedContentResponse(generated),
-          {
-            platform: platforms[0],
-            brandKit,
-            request: normalizedContent,
-          }
-        );
+        if (shouldRunUniversalPipeline) {
+          const pipeline = await runUniversalContentPipeline({
+            prompt: fileContext ? `${normalizedContent}\n\nSource material:\n${fileContext}` : normalizedContent,
+            platforms,
+            includeImage: true,
+            includeVideo: true,
+            includeVoice: true,
+            includeMusic: true,
+            enqueueForPosting: /\b(queue|schedule|post later|autopilot)\b/i.test(normalizedContent),
+          });
+
+          const assets = [
+            pipeline.media.imageUrl ? `Image: ${pipeline.media.imageUrl}` : null,
+            pipeline.media.videoUrl ? `Video: ${pipeline.media.videoUrl}` : null,
+            pipeline.audio.voiceUrl ? `Voice: ${pipeline.audio.voiceUrl}` : null,
+            pipeline.audio.musicUrl ? `Music: ${pipeline.audio.musicUrl}` : null,
+          ].filter(Boolean);
+
+          const platformSummary = pipeline.platformPackages
+            .map((pkg) => `${pkg.platform}: ${pkg.text}`)
+            .slice(0, 3)
+            .join('\n\n');
+
+          generatedResponse = await enforceGovernorApproval(
+            [
+              `I ran the full production pipeline for your ${pipeline.brandProfile.niche} niche.`,
+              '',
+              `Hook: ${pipeline.content.hook}`,
+              '',
+              `Primary script:\n${pipeline.content.script}`,
+              '',
+              platformSummary ? `Platform cuts:\n${platformSummary}` : '',
+              assets.length > 0 ? `Assets:\n${assets.join('\n')}` : '',
+              `Quality score: ${pipeline.criticVerdict.score}${pipeline.criticVerdict.approved ? ' (approved)' : ' (needs revision)'}`,
+              pipeline.queueIds.length > 0 ? `Queued jobs: ${pipeline.queueIds.join(', ')}` : '',
+            ]
+              .filter(Boolean)
+              .join('\n\n'),
+            {
+              platform: platforms[0],
+              brandKit,
+              request: normalizedContent,
+            }
+          );
+        } else {
+          const generated = await generateContent({
+            idea: fileContext ? `${normalizedContent}\n\nSource material:\n${fileContext}` : normalizedContent,
+            platforms,
+            customInstructions: 'Do the work directly. Return finished, platform-native social content instead of advice about what to create. Start with a stop-scroll hook and keep it aligned to the locked niche.',
+          }, brandKit);
+
+          generatedResponse = await enforceGovernorApproval(
+            formatGeneratedContentResponse(generated),
+            {
+              platform: platforms[0],
+              brandKit,
+              request: normalizedContent,
+            }
+          );
+        }
+
+        emitAgentLatency('content_generation', Date.now() - contentGenerationStart, {
+          platforms: platforms.join(','),
+          model: activeModel,
+          universalPipeline: shouldRunUniversalPipeline,
+        });
+
         const assistantMessage: ChatMessage = {
           id: generateId(),
           role: 'assistant',
@@ -1846,6 +1957,7 @@ Rules:
       );
 
       // Call AI
+      const chatGenerationStart = Date.now();
       const response = await universalChat(
         [
           { role: 'system', content: systemPrompt },
@@ -1854,6 +1966,10 @@ Rules:
         ],
         { model: activeModel, brandKit }
       );
+      emitAgentLatency('chat_response_generation', Date.now() - chatGenerationStart, {
+        model: activeModel,
+        intent: intent.type,
+      });
       const approvedResponse = await enforceGovernorApproval(response, {
         brandKit,
         request: normalizedContent,

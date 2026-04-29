@@ -8,10 +8,11 @@
     "build": "sh ./scripts/run-next.sh build --webpack",
     "start": "sh ./scripts/run-next.sh start",
     "lint": "eslint app components hooks lib types *.mjs",
-    "test": "pnpm run test:agent && pnpm run test:retry && pnpm run test:puter-service && pnpm run test:ai-routing",
+    "test": "pnpm run test:agent && pnpm run test:retry && pnpm run test:puter-service && pnpm run test:orchestration && pnpm run test:ai-routing",
     "test:agent": "node --eval \"import('./tests/agent-behavior.test.mjs')\"",
     "test:retry": "node --eval \"import('./tests/retry.test.mjs')\"",
     "test:puter-service": "node --eval \"import('./tests/puter-service.test.mjs')\"",
+    "test:orchestration": "node --eval \"import('./tests/orchestration-pipeline.test.mjs')\"",
     "test:ai-routing": "node --eval \"import('./tests/ai-routing.test.mjs')\""
   },
   "dependencies": {

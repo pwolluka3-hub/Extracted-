@@ -3,6 +3,7 @@
 
 import { kvGet, kvSet } from './puterService';
 import { generateId } from './memoryService';
+import { combineStructuredOutputs } from './orchestrationPrimitives';
 
 // Agent Types
 export type AgentRole = 
@@ -992,51 +993,7 @@ export function selectBestOutput(outputs: AgentOutput[]): AgentOutput | null {
 
 // Combine multiple outputs
 export function combineOutputs(outputs: AgentOutput[], strategy: 'merge' | 'sections'): string {
-  if (outputs.length === 0) return '';
-  if (outputs.length === 1) return outputs[0].content;
-
-  const bestByRole = (role: AgentRole): AgentOutput | undefined =>
-    outputs
-      .filter((output) => output.agentRole === role && output.content.trim().length > 0)
-      .sort((a, b) => b.score - a.score)[0];
-
-  const planner = bestByRole('planner');
-  const identity = bestByRole('identity');
-  const rules = bestByRole('rules');
-  const structure = bestByRole('structure');
-  const generator = bestByRole('generator') || bestByRole('writer');
-  const visual = bestByRole('visual');
-  const distribution = bestByRole('distribution') || bestByRole('hashtag');
-  const critic = bestByRole('critic');
-
-  if (planner || identity || rules || structure || generator || distribution || visual || critic) {
-    const sections: string[] = [];
-    if (planner?.content) sections.push(`Execution Plan\n${planner.content}`);
-    if (identity?.content) sections.push(`Identity\n${identity.content}`);
-    if (rules?.content) sections.push(`Rules\n${rules.content}`);
-    if (structure?.content) sections.push(`Structure\n${structure.content}`);
-    if (generator?.content) sections.push(`Content\n${generator.content}`);
-    if (visual?.content) sections.push(`Visual Prompts\n${visual.content}`);
-    if (distribution?.content) sections.push(`Captions & Distribution\n${distribution.content}`);
-    if (critic?.content) sections.push(`Critic Verdict\n${critic.content}`);
-    if (sections.length > 0) return sections.join('\n\n');
-  }
-  
-  if (strategy === 'sections') {
-    return outputs.map(o => `[${o.agentRole.toUpperCase()}]\n${o.content}`).join('\n\n');
-  }
-  
-  // Merge strategy: Use best hook, best body, etc.
-  const hookOutput = outputs.find(o => o.agentRole === 'hook');
-  const bodyOutput = outputs.find(o => o.agentRole === 'writer');
-  const hashtagOutput = outputs.find(o => o.agentRole === 'hashtag');
-  
-  let result = '';
-  if (hookOutput) result += hookOutput.content + '\n\n';
-  if (bodyOutput) result += bodyOutput.content;
-  if (hashtagOutput) result += '\n\n' + hashtagOutput.content;
-  
-  return result.trim();
+  return combineStructuredOutputs(outputs, strategy);
 }
 
 // Get agent statistics
