@@ -74,10 +74,27 @@ export interface AdaptiveContentStrategy {
   guidance: string[];
 }
 
+export interface EngagementFeedbackRecord {
+  id: string;
+  postId: string;
+  platform: string;
+  contentPreview: string;
+  impressions: number;
+  engagements: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  engagementRate: number;
+  score: number;
+  generationId?: string;
+  timestamp: string;
+}
+
 // Storage keys
 const KEYS = {
   patterns: 'nexus_learned_patterns',
   successes: 'nexus_success_records',
+  engagements: 'nexus_engagement_feedback',
   insights: 'nexus_learning_insights',
 };
 
@@ -88,6 +105,7 @@ const KEYS = {
 export class LearningSystem {
   private patterns: Map<string, LearnedPattern> = new Map();
   private successes: SuccessRecord[] = [];
+  private engagementFeedback: EngagementFeedbackRecord[] = [];
   private initialized = false;
 
   private config = {
@@ -109,6 +127,7 @@ export class LearningSystem {
     await Promise.all([
       this.loadPatterns(),
       this.loadSuccesses(),
+      this.loadEngagementFeedback(),
     ]);
 
     // Run pattern analysis on existing data
@@ -155,6 +174,83 @@ export class LearningSystem {
 
     await this.saveSuccesses();
     await this.savePatterns();
+  }
+
+  async recordEngagementFeedback(input: {
+    postId: string;
+    platform: string;
+    content?: string;
+    impressions?: number;
+    engagements?: number;
+    likes?: number;
+    comments?: number;
+    shares?: number;
+    generationId?: string;
+  }): Promise<void> {
+    if (!this.initialized) await this.initialize();
+
+    const impressions = Math.max(0, input.impressions || 0);
+    const likes = Math.max(0, input.likes || 0);
+    const comments = Math.max(0, input.comments || 0);
+    const shares = Math.max(0, input.shares || 0);
+    const engagements = Math.max(0, input.engagements ?? likes + comments + shares);
+    const engagementRate = impressions > 0 ? (engagements / impressions) * 100 : 0;
+    const score = Math.round(
+      Math.max(
+        0,
+        Math.min(
+          100,
+          engagementRate * 20 +
+            Math.min(18, shares * 2) +
+            Math.min(14, comments * 1.2) +
+            Math.min(10, likes * 0.25)
+        )
+      )
+    );
+
+    const record: EngagementFeedbackRecord = {
+      id: `eng_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      postId: input.postId,
+      platform: input.platform || 'general',
+      contentPreview: (input.content || '').slice(0, 240),
+      impressions,
+      engagements,
+      likes,
+      comments,
+      shares,
+      engagementRate: Math.round(engagementRate * 100) / 100,
+      score,
+      generationId: input.generationId,
+      timestamp: new Date().toISOString(),
+    };
+
+    this.engagementFeedback.push(record);
+    if (this.engagementFeedback.length > this.config.maxSuccessRecords) {
+      this.engagementFeedback = this.engagementFeedback.slice(-this.config.maxSuccessRecords);
+    }
+
+    if (score >= this.config.minScoreToLearn && input.content?.trim()) {
+      const extractedPatterns = this.extractPatterns(input.content);
+      const syntheticSuccess: SuccessRecord = {
+        id: `success_feedback_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        content: input.content,
+        score,
+        agentId: 'engagement_feedback',
+        platform: input.platform || 'general',
+        taskType: 'posted_feedback',
+        timestamp: record.timestamp,
+        patterns: extractedPatterns,
+      };
+      this.successes.push(syntheticSuccess);
+      if (this.successes.length > this.config.maxSuccessRecords) {
+        this.successes = this.successes.slice(-this.config.maxSuccessRecords);
+      }
+      await this.updatePatterns(syntheticSuccess);
+      await this.saveSuccesses();
+      await this.savePatterns();
+    }
+
+    await this.saveEngagementFeedback();
   }
 
   /**
@@ -571,6 +667,26 @@ export class LearningSystem {
       guidance.push('Learning data is still limited, so keep testing fresh angles within the locked niche.');
     }
 
+    const recentEngagement = this.engagementFeedback
+      .filter((entry) => !platform || entry.platform === platform)
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+      .slice(0, 10);
+    if (recentEngagement.length > 0) {
+      const averageRate =
+        recentEngagement.reduce((sum, entry) => sum + entry.engagementRate, 0) / recentEngagement.length;
+      const top = recentEngagement
+        .slice()
+        .sort((a, b) => b.score - a.score)[0];
+      guidance.push(
+        `Recent measured engagement rate is ${averageRate.toFixed(2)}%. Replicate the patterns from top-performing published content.`
+      );
+      if (top) {
+        guidance.push(
+          `Highest measured post score ${top.score} on ${top.platform}; keep hook style and CTA intensity aligned with that lane.`
+        );
+      }
+    }
+
     return {
       platform,
       recommendedContentType: topContentType,
@@ -587,6 +703,10 @@ export class LearningSystem {
    */
   getRecentSuccesses(limit = 20): SuccessRecord[] {
     return this.successes.slice(-limit);
+  }
+
+  getRecentEngagementFeedback(limit = 20): EngagementFeedbackRecord[] {
+    return this.engagementFeedback.slice(-limit);
   }
 
   // ==================== PERSISTENCE ====================
@@ -626,6 +746,23 @@ export class LearningSystem {
       await kvSet(KEYS.successes, JSON.stringify(this.successes));
     } catch {
       console.error('[LearningSystem] Failed to save successes');
+    }
+  }
+
+  private async loadEngagementFeedback(): Promise<void> {
+    try {
+      const data = await kvGet(KEYS.engagements);
+      this.engagementFeedback = data ? JSON.parse(data) : [];
+    } catch {
+      this.engagementFeedback = [];
+    }
+  }
+
+  private async saveEngagementFeedback(): Promise<void> {
+    try {
+      await kvSet(KEYS.engagements, JSON.stringify(this.engagementFeedback));
+    } catch {
+      console.error('[LearningSystem] Failed to save engagement feedback');
     }
   }
 }

@@ -66,6 +66,22 @@ function localKvKey(key: string): string {
   return `${LOCAL_KV_PREFIX}${key}`;
 }
 
+function serializeKvValue(key: string, value: unknown): string {
+  const raw = typeof value === 'string' ? value : JSON.stringify(value);
+  if (typeof raw !== 'string') {
+    throw new Error(`kvSet(${key}) rejected undefined value`);
+  }
+
+  if (!isSensitiveKvKey(key)) {
+    return raw;
+  }
+
+  return raw
+    .trim()
+    .replace(/[\r\n]+/g, '')
+    .slice(0, 4096);
+}
+
 function localFileKey(path: string): string {
   return `${LOCAL_FILE_PREFIX}${path.startsWith('/') ? path : `${BASE_PATH}/${path}`}`;
 }
@@ -519,7 +535,7 @@ export async function isSignedIn(): Promise<boolean> {
 // Key-Value Store
 export async function kvSet(key: string, value: unknown): Promise<boolean> {
   try {
-    const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
+    const stringValue = serializeKvValue(key, value);
     if (hasLocalStorage() && canMirrorKvToLocalStorage(key)) {
       window.localStorage.setItem(localKvKey(key), stringValue);
     } else if (hasLocalStorage()) {

@@ -1,7 +1,8 @@
 // Publishing Service - Ayrshare API integration
 import type { Platform, ContentDraft } from '@/lib/types';
 import { kvGet } from './puterService';
-import { validateContent, makeGovernorDecision } from './governorService';
+import { validateContent, makeGovernorDecision, evaluateMoodApproval } from './governorService';
+import { logPostingEvent, type GenerationSource } from './generationTrackerService';
 
 const AYRSHARE_API_BASE = 'https://api.ayrshare.com/api';
 
@@ -163,12 +164,23 @@ export async function publishPost(params: {
   platforms: Platform[];
   mediaUrl?: string;
   mediaUrls?: string[];
+  source?: GenerationSource | 'manual';
+  generationId?: string;
+  automationOutputId?: string;
 }): Promise<{
   success: boolean;
   postIds?: Record<string, string>;
   errors?: Record<string, string>;
 }> {
-  const { text, platforms, mediaUrl, mediaUrls } = params;
+  const {
+    text,
+    platforms,
+    mediaUrl,
+    mediaUrls,
+    source = 'manual',
+    generationId,
+    automationOutputId,
+  } = params;
 
   const ayrshareplatforms = platforms.map(p => PLATFORM_MAP[p]);
   const media = mediaUrls || (mediaUrl ? [mediaUrl] : undefined);
@@ -187,12 +199,32 @@ export async function publishPost(params: {
       }),
     });
 
-    return {
+    const publishResult = {
       success: !result.errors || Object.keys(result.errors).length === 0,
       postIds: result.postIds,
       errors: result.errors,
     };
+    await logPostingEvent({
+      source,
+      generationId,
+      automationOutputId,
+      platforms,
+      status: publishResult.success ? 'published' : 'failed',
+      textPreview: text,
+      postIds: publishResult.postIds,
+      error: publishResult.errors?.general,
+    });
+    return publishResult;
   } catch (error) {
+    await logPostingEvent({
+      source,
+      generationId,
+      automationOutputId,
+      platforms,
+      status: 'failed',
+      textPreview: text,
+      error: (error as Error).message,
+    });
     return {
       success: false,
       errors: { general: (error as Error).message },
@@ -207,12 +239,47 @@ export async function schedulePost(params: {
   scheduledDate: string; // ISO 8601
   mediaUrl?: string;
   mediaUrls?: string[];
+  source?: GenerationSource | 'manual';
+  generationId?: string;
+  automationOutputId?: string;
 }): Promise<{
   success: boolean;
   postId?: string;
   error?: string;
 }> {
-  const { text, platforms, scheduledDate, mediaUrl, mediaUrls } = params;
+  const {
+    text,
+    platforms,
+    scheduledDate,
+    mediaUrl,
+    mediaUrls,
+    source = 'manual',
+    generationId,
+    automationOutputId,
+  } = params;
+  const scheduleTime = new Date(scheduledDate);
+
+  if (Number.isNaN(scheduleTime.getTime())) {
+    return {
+      success: false,
+      error: 'Invalid schedule date provided.',
+    };
+  }
+
+  if (scheduleTime.getTime() <= Date.now()) {
+    return {
+      success: false,
+      error: 'Scheduled time must be in the future.',
+    };
+  }
+
+  const moodApproval = await evaluateMoodApproval(text);
+  if (!moodApproval.approved) {
+    return {
+      success: false,
+      error: `Mood approval blocked scheduling: ${moodApproval.reasons.join('; ')}`,
+    };
+  }
 
   const ayrshareplatforms = platforms.map(p => PLATFORM_MAP[p]);
   const media = mediaUrls || (mediaUrl ? [mediaUrl] : undefined);
@@ -231,12 +298,32 @@ export async function schedulePost(params: {
       }),
     });
 
-    return {
+    const publishResult = {
       success: !!result.id,
       postId: result.id,
       error: result.error,
     };
+    await logPostingEvent({
+      source,
+      generationId,
+      automationOutputId,
+      platforms,
+      status: publishResult.success ? 'scheduled' : 'failed',
+      textPreview: text,
+      postIds: publishResult.postId ? { scheduled: publishResult.postId } : undefined,
+      error: publishResult.error,
+    });
+    return publishResult;
   } catch (error) {
+    await logPostingEvent({
+      source,
+      generationId,
+      automationOutputId,
+      platforms,
+      status: 'failed',
+      textPreview: text,
+      error: (error as Error).message,
+    });
     return {
       success: false,
       error: (error as Error).message,
@@ -370,6 +457,16 @@ export async function publishDraft(
       success: false,
       errors: {
         general: `Governor blocked publish: ${governorDecision.reason}`,
+      },
+    };
+  }
+
+  const moodApproval = await evaluateMoodApproval(latestVersion.text);
+  if (!moodApproval.approved) {
+    return {
+      success: false,
+      errors: {
+        general: `Mood approval blocked publish: ${moodApproval.reasons.join('; ')}`,
       },
     };
   }

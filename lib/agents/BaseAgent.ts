@@ -148,6 +148,18 @@ export abstract class BaseAgent {
     return rawOutput.trim();
   }
 
+  protected applyDeepReasoningGuidance(prompt: string): string {
+    return `${prompt}
+
+Deep Reasoning Mode:
+- Work through the request in multiple internal passes before responding.
+- Reconcile user intent, platform constraints, and quality requirements.
+- Prefer specific, executable output over abstract advice.
+- Keep language natural and human; avoid corporate or robotic phrasing.
+- Do not reveal internal reasoning steps or chain-of-thought.
+- Return only the final deliverable content.`;
+  }
+
   // ==================== CORE METHODS ====================
 
   /**
@@ -177,7 +189,7 @@ export abstract class BaseAgent {
 
     try {
       // Build the prompt
-      const prompt = this.buildPrompt(context);
+      const prompt = this.applyDeepReasoningGuidance(this.buildPrompt(context));
       await this.recordDecision({
         timestamp: new Date().toISOString(),
         summary: `Built prompt for ${this.config.role} using provider ${context.provider.id}`,
@@ -221,6 +233,7 @@ export abstract class BaseAgent {
           evolutionVersion: this.state.evolutionVersion,
           provider: execution.providerId,
           retries: execution.retries,
+          reasoningMode: 'deep',
         },
       };
 

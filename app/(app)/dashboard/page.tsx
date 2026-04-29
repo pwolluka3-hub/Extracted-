@@ -2,45 +2,73 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/context/AuthContext';
-import { useAgent } from '@/lib/context/AgentContext';
 import { GlassCard } from '@/components/nexus/GlassCard';
 import { NeonButton } from '@/components/nexus/NeonButton';
 import { LoadingPulse } from '@/components/nexus/LoadingPulse';
 import Link from 'next/link';
-import { loadBrandKit } from '@/lib/services/memoryService';
+import { loadBrandKit, loadSchedule } from '@/lib/services/memoryService';
+import type { BrandKit } from '@/lib/types';
+
+interface QuickAction {
+  title: string;
+  description: string;
+  action: string;
+}
+
+function buildQuickActions(brand: BrandKit | null, scheduledCount: number): QuickAction[] {
+  const actions: QuickAction[] = [];
+
+  if (!brand?.brandName || !brand?.niche || (brand?.contentPillars?.length || 0) === 0) {
+    actions.push({
+      title: 'Complete Brand Setup',
+      description: 'Finish configuring your brand profile and content pillars',
+      action: '/brand',
+    });
+  }
+
+  actions.push({
+    title: 'Generate Content',
+    description: scheduledCount > 0
+      ? `Create your next post (${scheduledCount} already scheduled)`
+      : 'Create your first post for your primary platform',
+    action: '/studio',
+  });
+
+  actions.push({
+    title: scheduledCount > 0 ? 'Manage Schedule' : 'Plan Schedule',
+    description: scheduledCount > 0
+      ? 'Review and adjust upcoming scheduled posts'
+      : 'Set up your first scheduled post in the calendar',
+    action: '/calendar',
+  });
+
+  if (actions.length < 3) {
+    actions.push({
+      title: 'Connect Publishing',
+      description: 'Configure Ayrshare and provider keys in Settings',
+      action: '/settings',
+    });
+  }
+
+  return actions.slice(0, 3);
+}
 
 export default function DashboardPage() {
   const { user, isGuest, login } = useAuth();
-  const agent = useAgent();
-  const [dailyActions, setDailyActions] = useState<Array<{ title: string; description: string; action: string }>>([]);
+  const [dailyActions, setDailyActions] = useState<QuickAction[]>([]);
   const [loading, setLoading] = useState(true);
-  const [brandKit, setBrandKit] = useState<any>(null);
+  const [brandKit, setBrandKit] = useState<BrandKit | null>(null);
   const [isConnectingPuter, setIsConnectingPuter] = useState(false);
 
   useEffect(() => {
     const loadDashboard = async () => {
       try {
-        const brand = await loadBrandKit();
+        const [brand, schedule] = await Promise.all([
+          loadBrandKit(),
+          loadSchedule(),
+        ]);
         setBrandKit(brand);
-
-        const suggestions = [
-          {
-            title: 'Generate Content',
-            description: 'Create a new post for your primary platform',
-            action: '/studio'
-          },
-          {
-            title: 'View Schedule',
-            description: 'Check your upcoming scheduled posts',
-            action: '/calendar'
-          },
-          {
-            title: 'Complete Brand Setup',
-            description: 'Finish configuring your brand guidelines',
-            action: '/brand'
-          }
-        ];
-        setDailyActions(suggestions);
+        setDailyActions(buildQuickActions(brand, schedule.length));
       } catch (error) {
         console.error('[v0] Dashboard load error:', error);
       } finally {

@@ -38,6 +38,7 @@ import {
 import { fileProcessor, type ProcessedFile } from '@/lib/services/fileProcessor';
 import type { NexusResult } from '@/lib/core';
 import type { GovernorValidation } from '@/lib/core/GovernorSystem';
+import { loadProviderCapabilities, type ProviderCapability } from '@/lib/services/providerCapabilityService';
 
 export default function NexusAIDashboard() {
   const {
@@ -67,15 +68,27 @@ export default function NexusAIDashboard() {
   });
   const [uploadedFiles, setUploadedFiles] = useState<ProcessedFile[]>([]);
   const [isProcessingFile, setIsProcessingFile] = useState(false);
+  const [providerHealth, setProviderHealth] = useState<ProviderCapability[]>([]);
+
+  const refreshProviderHealth = useCallback(async () => {
+    try {
+      const capabilities = await loadProviderCapabilities();
+      setProviderHealth(capabilities);
+    } catch {
+      setProviderHealth([]);
+    }
+  }, []);
 
   // Refresh data periodically
   useEffect(() => {
+    void refreshProviderHealth();
     const interval = setInterval(() => {
       refreshStatus();
       refreshAgents();
+      void refreshProviderHealth();
     }, 10000);
     return () => clearInterval(interval);
-  }, [refreshStatus, refreshAgents]);
+  }, [refreshStatus, refreshAgents, refreshProviderHealth]);
 
   // Handle generation
   const handleGenerate = async () => {
@@ -421,10 +434,17 @@ export default function NexusAIDashboard() {
               onToggle={() => toggleSection('providers')}
             >
               <div className="space-y-2">
-                <ProviderStatus name="GPT-4o (Primary)" status="healthy" latency={450} />
-                <ProviderStatus name="Claude Sonnet" status="healthy" latency={380} />
-                <ProviderStatus name="GPT-4o Mini" status="healthy" latency={280} />
-                <ProviderStatus name="DALL-E 3" status="healthy" latency={1200} />
+                {providerHealth.length === 0 ? (
+                  <p className="text-gray-500 text-center py-3">No provider status available</p>
+                ) : (
+                  providerHealth.map((provider) => (
+                    <ProviderStatus
+                      key={provider.id}
+                      name={provider.name}
+                      status={provider.status}
+                    />
+                  ))
+                )}
               </div>
             </CollapsiblePanel>
 
@@ -559,6 +579,16 @@ function AgentCard({ agent }: AgentCardProps) {
     stable: <Minus className="h-4 w-4 text-gray-400" />,
   };
 
+  const heartbeatTime = agent.heartbeatAt ? new Date(agent.heartbeatAt).getTime() : Number.NaN;
+  const heartbeatAgeMs = Number.isFinite(heartbeatTime) ? Date.now() - heartbeatTime : Number.POSITIVE_INFINITY;
+  const heartbeatHealthy = Number.isFinite(heartbeatAgeMs) && heartbeatAgeMs < 120_000;
+  const heartbeatLabel = !Number.isFinite(heartbeatAgeMs)
+    ? 'waiting'
+    : heartbeatAgeMs < 60_000
+      ? `${Math.max(1, Math.floor(heartbeatAgeMs / 1000))}s ago`
+      : `${Math.max(1, Math.floor(heartbeatAgeMs / 60_000))}m ago`;
+  const brainStateLabel = (agent.brainState || 'idle').replace('_', ' ');
+
   const roleColors: Record<string, string> = {
     strategist: 'text-violet-400',
     writer: 'text-cyan-400',
@@ -575,9 +605,19 @@ function AgentCard({ agent }: AgentCardProps) {
         <div>
           <p className="text-white font-medium">{agent.name}</p>
           <p className="text-xs text-gray-400">v{agent.evolutionVersion} • {agent.role}</p>
+          <p className="text-[11px] text-gray-500">
+            {brainStateLabel} • heartbeat {heartbeatLabel}
+          </p>
+          {agent.lastDecision && (
+            <p className="text-[11px] text-gray-500 max-w-[220px] truncate">{agent.lastDecision}</p>
+          )}
         </div>
       </div>
       <div className="flex items-center gap-3">
+        <span
+          className={`h-2.5 w-2.5 rounded-full ${heartbeatHealthy ? 'bg-green-400 animate-pulse' : 'bg-yellow-400'}`}
+          title={heartbeatHealthy ? 'Agent heartbeat healthy' : 'Heartbeat stale'}
+        />
         <div className="text-right">
           <p className="text-white font-semibold">{agent.performanceScore}</p>
           <p className="text-xs text-gray-400">score</p>
@@ -590,7 +630,7 @@ function AgentCard({ agent }: AgentCardProps) {
 
 interface ProviderStatusProps {
   name: string;
-  status: 'healthy' | 'degraded' | 'offline';
+  status: 'healthy' | 'degraded' | 'offline' | 'unknown';
   latency?: number;
 }
 
@@ -599,6 +639,7 @@ function ProviderStatus({ name, status, latency }: ProviderStatusProps) {
     healthy: 'text-green-400',
     degraded: 'text-yellow-400',
     offline: 'text-red-400',
+    unknown: 'text-gray-400',
   };
 
   return (
@@ -606,7 +647,7 @@ function ProviderStatus({ name, status, latency }: ProviderStatusProps) {
       <div className="flex items-center gap-2">
         <span className={`w-2 h-2 rounded-full ${
           status === 'healthy' ? 'bg-green-400' :
-          status === 'degraded' ? 'bg-yellow-400' : 'bg-red-400'
+          status === 'degraded' ? 'bg-yellow-400' : status === 'offline' ? 'bg-red-400' : 'bg-gray-400'
         }`} />
         <span className="text-sm text-gray-300">{name}</span>
       </div>

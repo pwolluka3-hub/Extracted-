@@ -214,10 +214,15 @@ export async function importFromCSV(csvContent: string): Promise<BulkImportResul
 
 // Generate CSV template
 export function generateCSVTemplate(): string {
+  const dayOffset = (offset: number) => {
+    const date = new Date(Date.now() + offset * 24 * 60 * 60 * 1000);
+    return date.toISOString().slice(0, 10);
+  };
+
   return `content,platforms,date,time,hashtags,image_url
-"This is my first post! 🎉","twitter,instagram","2024-02-01","10:00","marketing,socialmedia",""
-"Another great post","linkedin","2024-02-02","14:00","business,networking",""
-"Video content caption","tiktok,instagram","2024-02-03","18:00","viral,trending",""`;
+"This is my first post! 🎉","twitter,instagram","${dayOffset(1)}","10:00","marketing,socialmedia",""
+"Another great post","linkedin","${dayOffset(2)}","14:00","business,networking",""
+"Video content caption","tiktok,instagram","${dayOffset(3)}","18:00","viral,trending",""`;
 }
 
 // Save bulk posts

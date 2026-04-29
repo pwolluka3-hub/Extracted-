@@ -5,7 +5,12 @@ import { kvGet } from './puterService';
 import { buildMemoryContext } from './agentMemoryService';
 import { waitForPuter } from './puterService';
 import { buildFallbackProviders, type RoutedProvider } from './providerFallback';
-import { dispatchProviderEvent, isPuterFallbackDisabled } from './providerControl';
+import {
+  dispatchProviderEvent,
+  isPuterFallbackDisabled,
+  setActiveChatModel,
+  setPuterFallbackDisabled,
+} from './providerControl';
 
 // Available models - including custom provider options
 export const AVAILABLE_MODELS: AIModel[] = [
@@ -966,11 +971,31 @@ export async function universalChat(
       const failedProvider = (failedModelConfig?.provider || 'puter') as RoutedProvider;
       applyProviderCooldown(failedProvider, errorMessage);
       if (failedProvider === 'puter' && isQuotaOrBillingError(errorMessage)) {
+        const replacementProvider = preferredProvider === 'puter'
+          ? fallbackProviders.find((provider) => provider !== 'puter' && !isProviderInCooldown(provider))
+          : null;
+        const replacementModel = replacementProvider
+          ? PROVIDER_DEFAULT_MODELS[replacementProvider]?.[0]
+          : null;
+        const canSwitchFromPuter = preferredProvider === 'puter' && !!replacementModel;
+
+        if (!disablePuterFallback && (preferredProvider !== 'puter' || canSwitchFromPuter)) {
+          await setPuterFallbackDisabled(true);
+        }
+
+        if (replacementModel) {
+          await setActiveChatModel(replacementModel);
+        }
+
         dispatchProviderEvent({
           type: 'puter_credit_exhausted',
           provider: 'puter',
           model: candidateModel,
-          message: 'Puter hit a credits or quota limit and has been cooled down for fallback attempts.',
+          message: canSwitchFromPuter
+            ? `Puter hit a credits or quota limit. Chat is switching to ${replacementProvider} and Puter fallback has been disabled.`
+            : preferredProvider === 'puter'
+            ? 'Puter hit a credits or quota limit and no alternate chat provider is configured. Add another provider to keep chat available when Puter is out of credits.'
+            : 'Puter hit a credits or quota limit. Puter fallback has been disabled so chat can stay on your selected provider.',
         });
       }
       if (isConfigurationError(errorMessage)) {

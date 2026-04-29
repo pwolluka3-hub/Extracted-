@@ -269,6 +269,113 @@ Provide detailed predictions with confidence levels.`,
 // Storage Keys
 const AGENTS_KEY = 'nexus_agents';
 const ORCHESTRATION_HISTORY_KEY = 'nexus_orchestration_history';
+const DEEP_REASONING_DIRECTIVE = `Deep Reasoning Mode:
+- Analyze the request in multiple internal passes before writing.
+- Verify assumptions against provided context and resolve conflicts.
+- Prioritize concrete, executable output over generic commentary.
+- Keep tone natural and human; avoid robotic or corporate phrasing.
+- Do not reveal internal reasoning steps or chain-of-thought.
+- Return only the final deliverable for this agent role.`;
+const VALID_AGENT_CAPABILITIES: ReadonlySet<AgentCapability> = new Set([
+  'text_generation',
+  'hook_creation',
+  'strategy_planning',
+  'content_optimization',
+  'quality_critique',
+  'visual_description',
+  'hashtag_research',
+  'engagement_prediction',
+  'multi_task',
+]);
+const VALID_AGENT_ROLES: ReadonlySet<AgentRole> = new Set([
+  'writer',
+  'hook',
+  'strategist',
+  'optimizer',
+  'critic',
+  'visual',
+  'hashtag',
+  'engagement',
+  'hybrid',
+]);
+const VALID_EVOLUTION_STATES: ReadonlySet<AgentConfig['evolutionState']> = new Set([
+  'active',
+  'promoted',
+  'demoted',
+  'deprecated',
+  'hybrid',
+]);
+
+function normalizeAgentConfig(raw: Partial<AgentConfig>): AgentConfig | null {
+  if (!raw || typeof raw !== 'object') return null;
+  if (!raw.role) return null;
+
+  const role = raw.role as AgentRole;
+  if (!VALID_AGENT_ROLES.has(role)) return null;
+  const template = DEFAULT_AGENTS.find((entry) => entry.role === role);
+  const defaultWeights = template?.scoringWeights || {
+    creativity: 0.25,
+    relevance: 0.25,
+    engagement: 0.25,
+    brandAlignment: 0.25,
+  };
+  const defaultPrompt = template?.promptTemplate || `You are a ${role} agent. Produce concrete, high-quality output aligned to the user request and context.`;
+  const defaultName = template?.name || (role === 'hybrid' ? 'HybridAgent' : `${role[0].toUpperCase()}${role.slice(1)}Agent`);
+
+  const capabilities = Array.isArray(raw.capabilities)
+    ? raw.capabilities.filter(
+        (capability): capability is AgentCapability =>
+          typeof capability === 'string' && VALID_AGENT_CAPABILITIES.has(capability as AgentCapability)
+      )
+    : [];
+
+  const now = new Date().toISOString();
+  const evolutionState =
+    typeof raw.evolutionState === 'string' && VALID_EVOLUTION_STATES.has(raw.evolutionState as AgentConfig['evolutionState'])
+      ? raw.evolutionState
+      : role === 'hybrid'
+      ? 'hybrid'
+      : template?.evolutionState || 'active';
+
+  return {
+    id: typeof raw.id === 'string' && raw.id.trim() ? raw.id : generateId(),
+    name: typeof raw.name === 'string' && raw.name.trim() ? raw.name : defaultName,
+    role,
+    capabilities: capabilities.length > 0 ? capabilities : template?.capabilities || ['multi_task'],
+    promptTemplate:
+      typeof raw.promptTemplate === 'string' && raw.promptTemplate.trim().length > 0
+        ? raw.promptTemplate
+        : defaultPrompt,
+    scoringWeights: {
+      creativity:
+        typeof raw.scoringWeights?.creativity === 'number' && Number.isFinite(raw.scoringWeights.creativity)
+          ? raw.scoringWeights.creativity
+          : defaultWeights.creativity,
+      relevance:
+        typeof raw.scoringWeights?.relevance === 'number' && Number.isFinite(raw.scoringWeights.relevance)
+          ? raw.scoringWeights.relevance
+          : defaultWeights.relevance,
+      engagement:
+        typeof raw.scoringWeights?.engagement === 'number' && Number.isFinite(raw.scoringWeights.engagement)
+          ? raw.scoringWeights.engagement
+          : defaultWeights.engagement,
+      brandAlignment:
+        typeof raw.scoringWeights?.brandAlignment === 'number' && Number.isFinite(raw.scoringWeights.brandAlignment)
+          ? raw.scoringWeights.brandAlignment
+          : defaultWeights.brandAlignment,
+    },
+    performanceScore:
+      typeof raw.performanceScore === 'number' && Number.isFinite(raw.performanceScore)
+        ? Math.max(0, Math.min(100, Math.round(raw.performanceScore)))
+        : template?.performanceScore ?? 75,
+    taskHistory: Array.isArray(raw.taskHistory) ? raw.taskHistory : [],
+    evolutionState,
+    version: typeof raw.version === 'number' && raw.version > 0 ? Math.floor(raw.version) : 1,
+    parentAgents: Array.isArray(raw.parentAgents) ? raw.parentAgents.filter((id) => typeof id === 'string') : undefined,
+    createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : now,
+    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : now,
+  };
+}
 
 // Initialize agents
 export async function initializeAgents(): Promise<AgentConfig[]> {
@@ -312,7 +419,20 @@ export async function initializeAgents(): Promise<AgentConfig[]> {
 export async function loadAgents(): Promise<AgentConfig[]> {
   try {
     const data = await kvGet(AGENTS_KEY);
-    return data ? JSON.parse(data) : [];
+    if (!data) return [];
+
+    const parsed = JSON.parse(data);
+    if (!Array.isArray(parsed)) return [];
+
+    const normalized = parsed
+      .map((entry) => normalizeAgentConfig(entry as Partial<AgentConfig>))
+      .filter((entry): entry is AgentConfig => !!entry);
+
+    if (JSON.stringify(parsed) !== JSON.stringify(normalized)) {
+      await saveAgents(normalized);
+    }
+
+    return normalized;
   } catch {
     return [];
   }
@@ -501,9 +621,10 @@ export async function executeAgentTask(
   for (const [key, value] of Object.entries(context)) {
     prompt = prompt.replace(`{{${key}}}`, value);
   }
+  const reasoningPrompt = `${prompt}\n\n${DEEP_REASONING_DIRECTIVE}`;
   
   try {
-    const content = await aiProvider(prompt);
+    const content = await aiProvider(reasoningPrompt);
     const duration = Date.now() - startTime;
     
     // Calculate score based on output characteristics
@@ -523,8 +644,8 @@ export async function executeAgentTask(
       agentRole: agent.role,
       content,
       score,
-      reasoning: `Generated by ${agent.name} (v${agent.version})`,
-      metadata: { duration, promptLength: prompt.length },
+      reasoning: `Generated by ${agent.name} (v${agent.version}) with deep reasoning`,
+      metadata: { duration, promptLength: reasoningPrompt.length, reasoningMode: 'deep' },
     };
   } catch (error) {
     return {

@@ -31,6 +31,9 @@ export interface AgentInfo {
   performanceScore: number;
   trend: string;
   evolutionVersion: number;
+  heartbeatAt: string | null;
+  brainState: 'idle' | 'thinking' | 'executing' | 'recovering' | 'healthy' | 'degraded';
+  lastDecision: string | null;
 }
 
 export interface SystemStatus {
@@ -82,14 +85,20 @@ export function useNexus(): UseNexusReturn {
         await nexusCore.initialize();
         await automationEngine.initialize();
 
-        const agents = nexusCore.getAgents().map(a => ({
-          id: a.getId(),
-          name: a.getName(),
-          role: a.getRole(),
-          performanceScore: a.getPerformanceScore(),
-          trend: a.getPerformanceTrend(),
-          evolutionVersion: a.getEvolutionVersion(),
-        }));
+        const agents = nexusCore.getAgents().map((agent) => {
+          const stats = agent.getStats();
+          return {
+            id: stats.id,
+            name: stats.name,
+            role: stats.role,
+            performanceScore: stats.performanceScore,
+            trend: stats.trend,
+            evolutionVersion: stats.evolutionVersion,
+            heartbeatAt: stats.heartbeatAt,
+            brainState: stats.brainState,
+            lastDecision: stats.lastDecision,
+          };
+        });
 
         const status = nexusCore.getStatus();
         const autoStats = automationEngine.getStats();
@@ -121,14 +130,20 @@ export function useNexus(): UseNexusReturn {
       const result = await nexusCore.execute(request);
 
       // Update agents after generation (they may have self-optimized)
-      const agents = nexusCore.getAgents().map(a => ({
-        id: a.getId(),
-        name: a.getName(),
-        role: a.getRole(),
-        performanceScore: a.getPerformanceScore(),
-        trend: a.getPerformanceTrend(),
-        evolutionVersion: a.getEvolutionVersion(),
-      }));
+      const agents = nexusCore.getAgents().map((agent) => {
+        const stats = agent.getStats();
+        return {
+          id: stats.id,
+          name: stats.name,
+          role: stats.role,
+          performanceScore: stats.performanceScore,
+          trend: stats.trend,
+          evolutionVersion: stats.evolutionVersion,
+          heartbeatAt: stats.heartbeatAt,
+          brainState: stats.brainState,
+          lastDecision: stats.lastDecision,
+        };
+      });
 
       setState(prev => ({
         ...prev,
@@ -201,14 +216,20 @@ export function useNexus(): UseNexusReturn {
 
   // Refresh status
   const refreshStatus = useCallback(async () => {
-    const agents = nexusCore.getAgents().map(a => ({
-      id: a.getId(),
-      name: a.getName(),
-      role: a.getRole(),
-      performanceScore: a.getPerformanceScore(),
-      trend: a.getPerformanceTrend(),
-      evolutionVersion: a.getEvolutionVersion(),
-    }));
+    const agents = nexusCore.getAgents().map((agent) => {
+      const stats = agent.getStats();
+      return {
+        id: stats.id,
+        name: stats.name,
+        role: stats.role,
+        performanceScore: stats.performanceScore,
+        trend: stats.trend,
+        evolutionVersion: stats.evolutionVersion,
+        heartbeatAt: stats.heartbeatAt,
+        brainState: stats.brainState,
+        lastDecision: stats.lastDecision,
+      };
+    });
 
     setState(prev => ({
       ...prev,
@@ -315,14 +336,20 @@ export function useNexusAgents() {
 
   const refresh = useCallback(() => {
     try {
-      const agentList = nexusCore.getAgents().map(a => ({
-        id: a.getId(),
-        name: a.getName(),
-        role: a.getRole(),
-        performanceScore: a.getPerformanceScore(),
-        trend: a.getPerformanceTrend(),
-        evolutionVersion: a.getEvolutionVersion(),
-      }));
+      const agentList = nexusCore.getAgents().map((agent) => {
+        const stats = agent.getStats();
+        return {
+          id: stats.id,
+          name: stats.name,
+          role: stats.role,
+          performanceScore: stats.performanceScore,
+          trend: stats.trend,
+          evolutionVersion: stats.evolutionVersion,
+          heartbeatAt: stats.heartbeatAt,
+          brainState: stats.brainState,
+          lastDecision: stats.lastDecision,
+        };
+      });
       setAgents(agentList);
     } catch {
       setAgents([]);

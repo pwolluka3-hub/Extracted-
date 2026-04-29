@@ -19,12 +19,15 @@ import { learningSystem } from './LearningSystem';
 import type { Platform } from '@/lib/types';
 import {
   trackGenerationFailure,
+  trackGenerationPosted,
   trackGenerationStart,
   trackGenerationSuccess,
 } from '../services/generationTrackerService';
 import { notificationService } from '../services/notificationService';
 import { listPublishedContent, loadBrandKit } from '../services/memoryService';
 import { runSafetyChecks } from '../services/publishSafetyService';
+import { syncPostedEngagements } from '../services/engagementSyncService';
+import { healthCheckAllProviders, loadProviderCapabilities } from '../services/providerCapabilityService';
 
 const VALID_PLATFORMS: Platform[] = [
   'twitter',
@@ -69,6 +72,7 @@ export interface AutomationOutput {
   result: NexusResult;
   request: NexusRequest;
   timestamp: string;
+  generationId?: string;
   status: 'pending' | 'approved' | 'rejected' | 'published';
   approvedAt?: string;
   publishedAt?: string;
@@ -85,12 +89,25 @@ export interface AutomationStats {
 
 type ContentStrategyPhase = 'audience_building' | 'transition' | 'monetization';
 
+interface AutomationQueueEntry {
+  id: string;
+  idempotencyKey: string;
+  request: NexusRequest;
+  attempts: number;
+  maxAttempts: number;
+  createdAt: string;
+  updatedAt: string;
+  nextAttemptAt: string | null;
+  lastError?: string;
+}
+
 // Storage keys
 const KEYS = {
   config: 'nexus_automation_config',
   state: 'nexus_automation_state',
   outputs: 'nexus_automation_outputs',
   queue: 'nexus_automation_queue',
+  deadLetters: 'nexus_automation_dead_letters',
 };
 
 /**
@@ -101,9 +118,121 @@ export class AutomationEngine {
   private config: AutomationConfig;
   private state: AutomationState;
   private outputs: AutomationOutput[] = [];
-  private queue: NexusRequest[] = [];
+  private queue: AutomationQueueEntry[] = [];
+  private deadLetters: AutomationQueueEntry[] = [];
   private intervalId: NodeJS.Timeout | null = null;
   private initialized = false;
+  private lastProviderHealthCheckAt = 0;
+  private lastFailureAlertAt = 0;
+
+  private buildIdempotencyKey(request: NexusRequest): string {
+    const normalized = JSON.stringify({
+      taskType: request.taskType,
+      platform: request.platform || 'general',
+      userInput: request.userInput.trim().toLowerCase().replace(/\s+/g, ' '),
+      customInstructions: (request.customInstructions || '').trim().toLowerCase().replace(/\s+/g, ' '),
+    });
+
+    let hash = 0;
+    for (let index = 0; index < normalized.length; index++) {
+      hash = ((hash << 5) - hash + normalized.charCodeAt(index)) | 0;
+    }
+
+    return `job_${Math.abs(hash).toString(16)}`;
+  }
+
+  private createQueueEntry(request: NexusRequest, maxAttempts = 3): AutomationQueueEntry {
+    const now = new Date().toISOString();
+    return {
+      id: `queue_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+      idempotencyKey: this.buildIdempotencyKey(request),
+      request,
+      attempts: 0,
+      maxAttempts: Math.max(1, maxAttempts),
+      createdAt: now,
+      updatedAt: now,
+      nextAttemptAt: null,
+    };
+  }
+
+  private getReadyQueueIndex(nowMs = Date.now()): number {
+    return this.queue.findIndex((entry) => {
+      if (!entry.nextAttemptAt) return true;
+      const next = new Date(entry.nextAttemptAt).getTime();
+      return Number.isFinite(next) && next <= nowMs;
+    });
+  }
+
+  private queueRetry(entry: AutomationQueueEntry, errorMessage: string): void {
+    entry.attempts += 1;
+    entry.lastError = errorMessage;
+    entry.updatedAt = new Date().toISOString();
+
+    if (entry.attempts >= entry.maxAttempts) {
+      entry.nextAttemptAt = null;
+      this.deadLetters.push(entry);
+      if (this.deadLetters.length > 200) {
+        this.deadLetters = this.deadLetters.slice(-200);
+      }
+      void notificationService.notifyContentFailed(
+        'automation queue job',
+        `Moved to dead-letter after ${entry.attempts} attempts: ${errorMessage}`
+      );
+      return;
+    }
+
+    const delayMs = Math.min(30 * 60 * 1000, 60 * 1000 * Math.pow(2, Math.max(0, entry.attempts - 1)));
+    entry.nextAttemptAt = new Date(Date.now() + delayMs).toISOString();
+    this.queue.push(entry);
+  }
+
+  private async ensureProvidersAvailable(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastProviderHealthCheckAt < 5 * 60 * 1000) {
+      return;
+    }
+    this.lastProviderHealthCheckAt = now;
+
+    await healthCheckAllProviders();
+    const capabilities = await loadProviderCapabilities();
+    const active = capabilities.filter((provider) => {
+      if (provider.status === 'offline') return false;
+      if (provider.requiresApiKey && !provider.apiKeyConfigured) return false;
+      return true;
+    });
+
+    if (active.length > 0) {
+      return;
+    }
+
+    this.state.pausedReason = 'No active providers available';
+    await this.stop();
+    void notificationService.notifySystemStatus(
+      'offline',
+      'Automation paused because no linked providers are currently available.'
+    );
+    throw new Error('Automation paused: no active providers available');
+  }
+
+  private maybeNotifyFailureRate(): void {
+    const now = Date.now();
+    if (now - this.lastFailureAlertAt < 30 * 60 * 1000) {
+      return;
+    }
+
+    if (this.state.totalRuns < 6) {
+      return;
+    }
+
+    const failureRate = this.state.failedRuns / Math.max(1, this.state.totalRuns);
+    if (failureRate >= 0.5) {
+      this.lastFailureAlertAt = now;
+      void notificationService.notifySystemStatus(
+        'offline',
+        `Automation failure rate is ${(failureRate * 100).toFixed(0)}% in recent runs. Review providers, prompts, and policy checks before continuing.`
+      );
+    }
+  }
 
   private async syncConfigWithMemoryProfile(): Promise<void> {
     const memory = await loadAgentMemory();
@@ -169,6 +298,7 @@ export class AutomationEngine {
 
     await this.loadOutputs();
     await this.loadQueue();
+    await this.loadDeadLetters();
 
     // Reset hourly counter if needed
     this.checkHourlyReset();
@@ -283,6 +413,7 @@ export class AutomationEngine {
 
     console.log('[AutomationEngine] Running cycle...');
     let trackedGenerationId: string | null = null;
+    let activeQueueEntry: AutomationQueueEntry | null = null;
 
     // Check hourly limit
     this.checkHourlyReset();
@@ -296,8 +427,15 @@ export class AutomationEngine {
     this.state.totalRuns++;
 
     try {
-      // Get request from queue or generate one
-      const request = this.queue.shift() || await this.generateRequest();
+      const readyIndex = this.getReadyQueueIndex();
+      if (readyIndex >= 0) {
+        activeQueueEntry = this.queue.splice(readyIndex, 1)[0];
+      } else {
+        activeQueueEntry = this.createQueueEntry(await this.generateRequest());
+      }
+
+      const request = activeQueueEntry.request;
+      await this.ensureProvidersAvailable();
       const tracked = await trackGenerationStart({
         source: 'automation',
         taskType: request.taskType,
@@ -312,6 +450,8 @@ export class AutomationEngine {
         this.state.successfulRuns++;
         this.state.consecutiveFailures = 0;
         await this.saveState();
+        await this.saveQueue();
+        await this.saveDeadLetters();
         if (this.state.isRunning) {
           this.scheduleNextRun();
         }
@@ -327,7 +467,7 @@ export class AutomationEngine {
       }
 
       // Process result
-      await this.processResult(result, request);
+      await this.processResult(result, request, tracked.record.id);
       await trackGenerationSuccess(tracked.record.id, {
         artifactId: result.success ? this.outputs[this.outputs.length - 1]?.id : undefined,
         artifactType: result.success ? 'automation_output' : undefined,
@@ -357,26 +497,46 @@ export class AutomationEngine {
 
     } catch (error) {
       console.error('[AutomationEngine] Cycle error:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unexpected automation error';
       this.state.failedRuns++;
       this.state.consecutiveFailures++;
       if (trackedGenerationId) {
         await trackGenerationFailure(
           trackedGenerationId,
-          error instanceof Error ? error.message : 'Unexpected automation error'
+          errorMessage
         );
+      }
+      if (activeQueueEntry) {
+        this.queueRetry(activeQueueEntry, errorMessage);
       }
       void notificationService.notifyContentFailed(
         'automation run',
-        error instanceof Error ? error.message : 'Unexpected automation error'
+        errorMessage
       );
+      this.maybeNotifyFailureRate();
+
+      if (
+        this.config.pauseOnFailure &&
+        this.state.consecutiveFailures >= this.config.maxConsecutiveFailures
+      ) {
+        this.state.pausedReason = `${this.state.consecutiveFailures} consecutive failures`;
+        await this.stop();
+      }
     }
 
     await this.saveState();
     await this.saveQueue();
+    await this.saveDeadLetters();
 
     // Schedule next run if still running
     if (this.state.isRunning) {
       this.scheduleNextRun();
+    }
+
+    if (this.state.totalRuns % 3 === 0) {
+      void syncPostedEngagements({ limit: 25 }).catch((error) => {
+        console.warn('[AutomationEngine] Engagement sync skipped:', error);
+      });
     }
   }
 
@@ -520,7 +680,7 @@ export class AutomationEngine {
   /**
    * Process generation result
    */
-  private async processResult(result: NexusResult, request: NexusRequest): Promise<void> {
+  private async processResult(result: NexusResult, request: NexusRequest, generationId?: string): Promise<void> {
     if (!result.success) {
       throw new Error('Automation result was not successful');
     }
@@ -539,6 +699,7 @@ export class AutomationEngine {
         result,
         request,
         timestamp: new Date().toISOString(),
+        generationId,
         status: this.config.requireApproval ? 'pending' : 'approved',
       };
 
@@ -590,7 +751,18 @@ export class AutomationEngine {
    * Add request to queue
    */
   async addToQueue(request: NexusRequest): Promise<void> {
-    this.queue.push(request);
+    const entry = this.createQueueEntry(request);
+    const duplicateIndex = this.queue.findIndex(
+      (queued) => queued.idempotencyKey === entry.idempotencyKey
+    );
+    if (duplicateIndex >= 0) {
+      this.queue[duplicateIndex].updatedAt = new Date().toISOString();
+      this.queue[duplicateIndex].lastError = undefined;
+      this.queue[duplicateIndex].nextAttemptAt = null;
+      this.queue[duplicateIndex].request = request;
+    } else {
+      this.queue.push(entry);
+    }
     await this.saveQueue();
   }
 
@@ -598,7 +770,57 @@ export class AutomationEngine {
    * Get queue
    */
   getQueue(): NexusRequest[] {
-    return [...this.queue];
+    return this.queue.map((entry) => entry.request);
+  }
+
+  getQueueDetails(): Array<{
+    id: string;
+    request: NexusRequest;
+    attempts: number;
+    maxAttempts: number;
+    nextAttemptAt: string | null;
+    lastError?: string;
+  }> {
+    return this.queue.map((entry) => ({
+      id: entry.id,
+      request: entry.request,
+      attempts: entry.attempts,
+      maxAttempts: entry.maxAttempts,
+      nextAttemptAt: entry.nextAttemptAt,
+      lastError: entry.lastError,
+    }));
+  }
+
+  getDeadLetters(): Array<{
+    id: string;
+    request: NexusRequest;
+    attempts: number;
+    maxAttempts: number;
+    lastError?: string;
+    updatedAt: string;
+  }> {
+    return this.deadLetters.map((entry) => ({
+      id: entry.id,
+      request: entry.request,
+      attempts: entry.attempts,
+      maxAttempts: entry.maxAttempts,
+      lastError: entry.lastError,
+      updatedAt: entry.updatedAt,
+    }));
+  }
+
+  async retryDeadLetter(entryId: string): Promise<boolean> {
+    const index = this.deadLetters.findIndex((entry) => entry.id === entryId);
+    if (index < 0) return false;
+
+    const entry = this.deadLetters.splice(index, 1)[0];
+    entry.attempts = 0;
+    entry.lastError = undefined;
+    entry.nextAttemptAt = null;
+    entry.updatedAt = new Date().toISOString();
+    this.queue.push(entry);
+    await Promise.all([this.saveQueue(), this.saveDeadLetters()]);
+    return true;
   }
 
   /**
@@ -665,6 +887,9 @@ export class AutomationEngine {
     const publishResult = await publishPost({
       text: output.result.output,
       platforms: [platform],
+      source: 'automation',
+      generationId: output.generationId,
+      automationOutputId: output.id,
     });
 
     if (!publishResult.success) {
@@ -675,6 +900,12 @@ export class AutomationEngine {
     output.publishedAt = new Date().toISOString();
 
     await this.saveOutputs();
+    if (output.generationId) {
+      await trackGenerationPosted(output.generationId, publishResult.postIds);
+    }
+    void syncPostedEngagements({ limit: 10 }).catch((error) => {
+      console.warn('[AutomationEngine] Engagement sync skipped:', error);
+    });
     return true;
   }
 
@@ -801,7 +1032,48 @@ export class AutomationEngine {
   private async loadQueue(): Promise<void> {
     try {
       const data = await kvGet(KEYS.queue);
-      this.queue = data ? JSON.parse(data) : [];
+      if (!data) {
+        this.queue = [];
+        return;
+      }
+
+      const parsed = JSON.parse(data) as unknown;
+      if (!Array.isArray(parsed)) {
+        this.queue = [];
+        return;
+      }
+
+      this.queue = parsed
+        .map((item) => {
+          if (!item || typeof item !== 'object') return null;
+          const candidate = item as Partial<AutomationQueueEntry> & { request?: NexusRequest; userInput?: string };
+
+          if (candidate.request && typeof candidate.request === 'object' && candidate.request.userInput) {
+            const normalized: AutomationQueueEntry = {
+              id: typeof candidate.id === 'string' ? candidate.id : `queue_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+              idempotencyKey:
+                typeof candidate.idempotencyKey === 'string' && candidate.idempotencyKey
+                  ? candidate.idempotencyKey
+                  : this.buildIdempotencyKey(candidate.request),
+              request: candidate.request,
+              attempts: Number.isFinite(candidate.attempts) ? Math.max(0, Number(candidate.attempts)) : 0,
+              maxAttempts: Number.isFinite(candidate.maxAttempts) ? Math.max(1, Number(candidate.maxAttempts)) : 3,
+              createdAt: typeof candidate.createdAt === 'string' ? candidate.createdAt : new Date().toISOString(),
+              updatedAt: typeof candidate.updatedAt === 'string' ? candidate.updatedAt : new Date().toISOString(),
+              nextAttemptAt: typeof candidate.nextAttemptAt === 'string' ? candidate.nextAttemptAt : null,
+              lastError: typeof candidate.lastError === 'string' ? candidate.lastError : undefined,
+            };
+            return normalized;
+          }
+
+          if (typeof candidate.userInput === 'string') {
+            const legacyRequest = candidate as unknown as NexusRequest;
+            return this.createQueueEntry(legacyRequest);
+          }
+
+          return null;
+        })
+        .filter((entry): entry is AutomationQueueEntry => Boolean(entry));
     } catch {
       this.queue = [];
     }
@@ -812,6 +1084,28 @@ export class AutomationEngine {
       await kvSet(KEYS.queue, JSON.stringify(this.queue));
     } catch {
       console.error('[AutomationEngine] Failed to save queue');
+    }
+  }
+
+  private async loadDeadLetters(): Promise<void> {
+    try {
+      const data = await kvGet(KEYS.deadLetters);
+      if (!data) {
+        this.deadLetters = [];
+        return;
+      }
+      const parsed = JSON.parse(data);
+      this.deadLetters = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      this.deadLetters = [];
+    }
+  }
+
+  private async saveDeadLetters(): Promise<void> {
+    try {
+      await kvSet(KEYS.deadLetters, JSON.stringify(this.deadLetters.slice(-200)));
+    } catch {
+      console.error('[AutomationEngine] Failed to save dead letters');
     }
   }
 

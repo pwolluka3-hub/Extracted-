@@ -1,29 +1,33 @@
 'use client';
 
 import { useState } from 'react';
-import { useAuth } from '@/lib/context/AuthContext';
 import { GlassCard } from '@/components/nexus/GlassCard';
 import { NeonButton } from '@/components/nexus/NeonButton';
 import { Upload, Download, CheckCircle2, AlertCircle } from 'lucide-react';
-import { scheduleBulkPosts, parseBulkCSV } from '@/lib/services/bulkScheduleService';
+import { scheduleBulkPosts, parseBulkCSV, type BulkScheduleInput } from '@/lib/services/bulkScheduleService';
 
 export default function BulkSchedulePage() {
-  const { user } = useAuth();
-  const [csvContent, setCsvContent] = useState('');
-  const [parsedPosts, setParsedPosts] = useState<any[]>([]);
+  const [parsedPosts, setParsedPosts] = useState<Array<BulkScheduleInput & { schedule_date?: string }>>([]);
   const [uploading, setUploading] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
 
   const downloadTemplate = () => {
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const dayAfter = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
+    const isoDate = (date: Date) => date.toISOString().slice(0, 10);
+
     const template = `text,image_url,platforms,schedule_date,hashtags
-"Your post text here","https://example.com/image.jpg","twitter,instagram,linkedin","2026-04-08","#marketing #ai"
-"Another post","","twitter","2026-04-09","#content"`;
+"Your post text here","https://example.com/image.jpg","twitter,instagram,linkedin","${isoDate(tomorrow)}","#marketing #ai"
+"Another post","","twitter","${isoDate(dayAfter)}","#content"`;
     const blob = new Blob([template], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = 'bulk_schedule_template.csv';
+    document.body.appendChild(a);
     a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -33,7 +37,6 @@ export default function BulkSchedulePage() {
     const reader = new FileReader();
     reader.onload = async (event) => {
       const csv = event.target?.result as string;
-      setCsvContent(csv);
 
       try {
         const { posts, validationErrors } = await parseBulkCSV(csv);
@@ -51,7 +54,22 @@ export default function BulkSchedulePage() {
 
     setUploading(true);
     try {
-      const results = await scheduleBulkPosts(parsedPosts);
+      const normalizedPosts = parsedPosts.map((post, index) => {
+        const fallbackDate = post.schedule_date ? new Date(post.schedule_date) : null;
+        return {
+          id: post.id || `bulk_${Date.now()}_${index}`,
+          content: post.content || post.text || '',
+          text: post.text || post.content || '',
+          platforms: post.platforms,
+          scheduledAt:
+            post.scheduledAt ||
+            (fallbackDate && !Number.isNaN(fallbackDate.getTime()) ? fallbackDate.toISOString() : undefined),
+          imageUrl: post.imageUrl,
+          hashtags: post.hashtags,
+          status: post.status || 'pending',
+        };
+      });
+      const results = await scheduleBulkPosts(normalizedPosts);
       setErrors([`Successfully scheduled ${results.successful} out of ${results.total} posts`]);
       setParsedPosts([]);
     } catch (error) {
@@ -132,7 +150,11 @@ export default function BulkSchedulePage() {
                     {post.platforms.join(', ')}
                   </span>
                   <span className="px-2 py-1 rounded bg-muted/50 text-muted-foreground">
-                    {new Date(post.schedule_date).toLocaleDateString()}
+                    {post.schedule_date
+                      ? new Date(post.schedule_date).toLocaleDateString()
+                      : post.scheduledAt
+                      ? new Date(post.scheduledAt).toLocaleDateString()
+                      : 'No date'}
                   </span>
                 </div>
               </div>

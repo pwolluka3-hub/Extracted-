@@ -8,6 +8,7 @@ import { NeonButton } from '@/components/nexus/NeonButton';
 import { LoadingPulse } from '@/components/nexus/LoadingPulse';
 import { saveBrandKit, setOnboardingComplete } from '@/lib/services/memoryService';
 import { kvSet } from '@/lib/services/puterService';
+import { setActiveChatModel } from '@/lib/services/providerControl';
 import type { BrandKit, Platform } from '@/lib/types';
 import { 
   Check, 
@@ -229,8 +230,7 @@ function OnboardingContent() {
       }
       
       // Save selected model
-      await kvSet('default_model', selectedModel);
-      await kvSet('ai_model', selectedModel);
+      await setActiveChatModel(selectedModel);
       
       // Skip sample generation during onboarding - user can generate from dashboard
       // This prevents hanging if AI service isn't ready

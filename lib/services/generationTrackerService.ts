@@ -1,7 +1,7 @@
 import { PATHS, readFile, writeFile } from './puterService';
 
 export type GenerationSource = 'studio' | 'automation' | 'agent';
-export type GenerationStatus = 'pending' | 'completed' | 'failed';
+export type GenerationStatus = 'pending' | 'completed' | 'failed' | 'posted';
 
 export interface GenerationRecord {
   id: string;
@@ -17,6 +17,21 @@ export interface GenerationRecord {
   lastError?: string;
   artifactId?: string;
   artifactType?: 'draft' | 'automation_output';
+  postedAt?: string;
+  postIds?: Record<string, string>;
+}
+
+export interface PostingEvent {
+  id: string;
+  source: GenerationSource | 'manual';
+  generationId?: string;
+  automationOutputId?: string;
+  platforms: string[];
+  status: 'published' | 'scheduled' | 'failed';
+  textPreview: string;
+  postIds?: Record<string, string>;
+  error?: string;
+  createdAt: string;
 }
 
 interface TrackGenerationInput {
@@ -28,6 +43,7 @@ interface TrackGenerationInput {
 }
 
 const REGISTRY_PATH = `${PATHS.system}/generation-registry.json`;
+const POSTING_LOG_PATH = `${PATHS.system}/posting-events.json`;
 const COMPLETED_DUPLICATE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function normalizeValue(value: string): string {
@@ -80,12 +96,13 @@ export async function trackGenerationStart(input: TrackGenerationInput): Promise
   const fingerprint = buildFingerprint(input);
   const records = await loadRegistry();
   const existing = records.find((record) => record.fingerprint === fingerprint);
+  const dedupeEnabled = input.source === 'automation';
 
-  if (existing && isBlockingDuplicate(existing, Boolean(input.allowRetryFailed), nowMs)) {
+  if (dedupeEnabled && existing && isBlockingDuplicate(existing, Boolean(input.allowRetryFailed), nowMs)) {
     return { duplicate: true, record: existing };
   }
 
-  if (existing && existing.status === 'failed' && input.allowRetryFailed) {
+  if (dedupeEnabled && existing && existing.status === 'failed' && input.allowRetryFailed) {
     existing.status = 'pending';
     existing.updatedAt = now.toISOString();
     existing.attempts += 1;
@@ -144,4 +161,45 @@ export async function trackGenerationFailure(generationId: string, error: string
 
 export async function getGenerationRegistry(): Promise<GenerationRecord[]> {
   return loadRegistry();
+}
+
+async function loadPostingEvents(): Promise<PostingEvent[]> {
+  const events = await readFile<PostingEvent[]>(POSTING_LOG_PATH, true);
+  return Array.isArray(events) ? events : [];
+}
+
+async function savePostingEvents(events: PostingEvent[]): Promise<void> {
+  await writeFile(POSTING_LOG_PATH, events.slice(-500));
+}
+
+export async function logPostingEvent(event: Omit<PostingEvent, 'id' | 'createdAt'>): Promise<void> {
+  const events = await loadPostingEvents();
+  events.push({
+    ...event,
+    id: `post_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: new Date().toISOString(),
+    textPreview: event.textPreview.slice(0, 240),
+  });
+  await savePostingEvents(events);
+}
+
+export async function trackGenerationPosted(
+  generationId: string,
+  postIds?: Record<string, string>
+): Promise<void> {
+  const records = await loadRegistry();
+  const record = records.find((entry) => entry.id === generationId);
+  if (!record) return;
+
+  record.status = 'posted';
+  record.updatedAt = new Date().toISOString();
+  record.postedAt = record.updatedAt;
+  record.postIds = postIds;
+  record.lastError = undefined;
+
+  await saveRegistry(records);
+}
+
+export async function getPostingEvents(): Promise<PostingEvent[]> {
+  return loadPostingEvents();
 }

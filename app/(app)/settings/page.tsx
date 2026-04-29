@@ -7,6 +7,7 @@ import { NeonButton } from '@/components/nexus/NeonButton';
 import { StatusBadge } from '@/components/nexus/StatusBadge';
 import { kvDelete, kvGet, kvSet } from '@/lib/services/puterService';
 import { saveProviderAccount, verifyProviderKey } from '@/lib/services/accountService';
+import { setActiveChatModel } from '@/lib/services/providerControl';
 import {
   Brain,
   Zap,
@@ -305,8 +306,7 @@ export default function SettingsPage() {
       ];
 
       const savePromises = [
-        kvSet('ai_model', settings.aiModel),
-        kvSet('default_model', settings.aiModel),
+        setActiveChatModel(settings.aiModel),
         kvSet('image_provider', settings.imageProvider),
         kvSet('video_provider', settings.videoProvider),
         ...storedSettings.map(([key, value]) => syncStoredValue(key, value)),

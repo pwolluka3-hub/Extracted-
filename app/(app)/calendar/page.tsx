@@ -1,17 +1,18 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useAuth } from '@/lib/context/AuthContext';
 import { GlassCard } from '@/components/nexus/GlassCard';
 import { NeonButton } from '@/components/nexus/NeonButton';
 import { LoadingPulse } from '@/components/nexus/LoadingPulse';
 import { StatusBadge } from '@/components/nexus/StatusBadge';
-import { loadSchedule } from '@/lib/services/memoryService';
+import Link from 'next/link';
+import { loadDraft, loadSchedule, removeFromSchedule } from '@/lib/services/memoryService';
+import type { ScheduledPost } from '@/lib/types';
 
 export default function CalendarPage() {
-  const { user } = useAuth();
   const [currentMonth, setCurrentMonth] = useState(new Date());
-  const [posts, setPosts] = useState<any[]>([]);
+  const [posts, setPosts] = useState<ScheduledPost[]>([]);
+  const [draftPreviewByPostId, setDraftPreviewByPostId] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -19,6 +20,15 @@ export default function CalendarPage() {
       try {
         const schedule = await loadSchedule();
         setPosts(schedule || []);
+        const previewEntries = await Promise.all(
+          (schedule || []).map(async (post) => {
+            const draft = await loadDraft(post.draftId);
+            const latest = draft?.versions?.[draft.versions.length - 1]?.text?.trim();
+            const preview = latest || `Draft ${post.draftId.slice(0, 8)}`;
+            return [post.id, preview] as const;
+          })
+        );
+        setDraftPreviewByPostId(Object.fromEntries(previewEntries));
       } catch (error) {
         console.error('[v0] Schedule load error:', error);
       } finally {
@@ -28,6 +38,25 @@ export default function CalendarPage() {
 
     fetchSchedule();
   }, []);
+
+  const handleCancel = async (postId: string) => {
+    try {
+      await removeFromSchedule(postId);
+      const schedule = await loadSchedule();
+      setPosts(schedule || []);
+      const previewEntries = await Promise.all(
+        (schedule || []).map(async (post) => {
+          const draft = await loadDraft(post.draftId);
+          const latest = draft?.versions?.[draft.versions.length - 1]?.text?.trim();
+          const preview = latest || `Draft ${post.draftId.slice(0, 8)}`;
+          return [post.id, preview] as const;
+        })
+      );
+      setDraftPreviewByPostId(Object.fromEntries(previewEntries));
+    } catch (error) {
+      console.error('Failed to cancel scheduled post:', error);
+    }
+  };
 
   const getDaysInMonth = (date: Date) => {
     return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
@@ -97,8 +126,8 @@ export default function CalendarPage() {
                 >
                   <div className="text-sm font-semibold text-white mb-1">{day}</div>
                   <div className="space-y-1">
-                    {dayPosts.slice(0, 2).map((post, idx) => (
-                      <div key={idx} className="text-xs bg-violet/20 text-violet px-2 py-1 rounded truncate">
+                    {dayPosts.slice(0, 2).map((post) => (
+                      <div key={post.id} className="text-xs bg-violet/20 text-violet px-2 py-1 rounded truncate">
                         {post.platforms?.[0] || 'Post'}
                       </div>
                     ))}
@@ -120,17 +149,21 @@ export default function CalendarPage() {
           ) : posts.length === 0 ? (
             <GlassCard className="p-8 text-center">
               <p className="text-gray-400 mb-4">No posts scheduled yet</p>
-              <NeonButton>Create First Post</NeonButton>
+              <Link href="/studio">
+                <NeonButton>Create First Post</NeonButton>
+              </Link>
             </GlassCard>
           ) : (
             <div className="space-y-4">
-              {posts.map((post, idx) => (
-                <GlassCard key={idx} className="p-6">
+              {posts.map((post) => (
+                <GlassCard key={post.id} className="p-6">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1">
-                      <h3 className="text-lg font-semibold text-white mb-2">{post.text?.substring(0, 100)}...</h3>
+                      <h3 className="text-lg font-semibold text-white mb-2">
+                        {(draftPreviewByPostId[post.id] || 'Scheduled draft').substring(0, 100)}...
+                      </h3>
                       <div className="flex items-center gap-4 flex-wrap mb-4">
-                        {post.platforms?.map((platform: string) => (
+                        {post.platforms?.map((platform) => (
                           <StatusBadge key={platform} status="scheduled" platform={platform} />
                         ))}
                       </div>
@@ -139,10 +172,18 @@ export default function CalendarPage() {
                       </p>
                     </div>
                     <div className="flex gap-2">
-                      <button className="px-4 py-2 text-cyan hover:text-cyan/80 transition-colors text-sm">
+                      <Link
+                        href="/drafts"
+                        className="px-4 py-2 text-cyan hover:text-cyan/80 transition-colors text-sm"
+                      >
                         Edit
-                      </button>
-                      <button className="px-4 py-2 text-error hover:text-error/80 transition-colors text-sm">
+                      </Link>
+                      <button
+                        onClick={() => {
+                          void handleCancel(post.id);
+                        }}
+                        className="px-4 py-2 text-error hover:text-error/80 transition-colors text-sm"
+                      >
                         Cancel
                       </button>
                     </div>

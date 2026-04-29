@@ -5,6 +5,7 @@ import { kvDelete, kvGet, kvSet } from './puterService';
 import { loadBrandKit } from './memoryService';
 import { loadAgents, type AgentOutput } from './multiAgentService';
 import { loadEvolutionProposals } from './agentEvolutionService';
+import type { MusicMood } from './musicEngine';
 
 // Governor Types
 export interface GovernorConfig {
@@ -61,6 +62,12 @@ export interface GovernorDecision {
   reason: string;
   alternativeModel?: string;
   suggestions?: string[];
+}
+
+export interface MoodApproval {
+  approved: boolean;
+  mood: MusicMood;
+  reasons: string[];
 }
 
 // Storage Keys
@@ -203,6 +210,99 @@ const ROBOTIC_PATTERNS = [
   /\bparadigm\b/i,
   /\bholistic\b/i,
 ];
+
+function inferMoodFromText(content: string): MusicMood {
+  const lower = content.toLowerCase();
+  const moodScore = {
+    energetic: /\b(launch|breakthrough|power|viral|hype|bold|fast|now)\b/g,
+    calm: /\b(calm|steady|simple|clarity|mindful|slow)\b/g,
+    dramatic: /\b(shocking|urgent|crisis|critical|must|warning)\b/g,
+    inspiring: /\b(inspire|growth|win|build|progress|future|vision)\b/g,
+    mysterious: /\b(secret|unknown|hidden|mystery|unseen)\b/g,
+    nostalgic: /\b(remember|classic|retro|throwback|nostalgia)\b/g,
+    happy: /\b(fun|joy|celebrate|excited|love)\b/g,
+    sad: /\b(sad|loss|hurt|grief|pain)\b/g,
+  } as const;
+
+  let bestMood: MusicMood['primary'] = 'inspiring';
+  let bestScore = -1;
+  for (const [mood, pattern] of Object.entries(moodScore) as Array<[MusicMood['primary'], RegExp]>) {
+    const score = (lower.match(pattern) || []).length;
+    if (score > bestScore) {
+      bestScore = score;
+      bestMood = mood;
+    }
+  }
+
+  const energy = Math.max(
+    20,
+    Math.min(
+      95,
+      Math.round(
+        (bestMood === 'energetic' || bestMood === 'dramatic' ? 78 : 52) +
+          (/\!/.test(content) ? 8 : 0) +
+          Math.min(12, Math.floor(content.length / 120))
+      )
+    )
+  );
+
+  return {
+    primary: bestMood,
+    tempo: energy >= 72 ? 'fast' : energy <= 40 ? 'slow' : 'medium',
+    energy,
+    genre:
+      bestMood === 'dramatic'
+        ? 'cinematic hybrid'
+        : bestMood === 'calm'
+        ? 'ambient electronic'
+        : bestMood === 'energetic'
+        ? 'modern electronic'
+        : 'inspiring modern',
+    instruments:
+      bestMood === 'calm'
+        ? ['piano', 'soft synth']
+        : bestMood === 'dramatic'
+        ? ['strings', 'hybrid percussion']
+        : ['synth', 'drums'],
+    keywords: [bestMood, energy >= 70 ? 'high-energy' : 'balanced', 'natural'],
+  };
+}
+
+export async function evaluateMoodApproval(content: string): Promise<MoodApproval> {
+  const normalized = (content || '').trim();
+  const reasons: string[] = [];
+  const mood = inferMoodFromText(normalized);
+
+  if (!normalized) {
+    reasons.push('No content to validate');
+  }
+
+  const matchedRobotic = ROBOTIC_PATTERNS.filter((pattern) => pattern.test(normalized));
+  if (matchedRobotic.length > 0) {
+    reasons.push('Contains robotic or corporate phrasing that sounds unnatural');
+  }
+
+  const sentences = normalized
+    .split(/[.!?]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const uniqueSentences = new Set(sentences.map((part) => part.toLowerCase()));
+  if (sentences.length >= 3 && uniqueSentences.size <= Math.ceil(sentences.length * 0.6)) {
+    reasons.push('Sentence structure is repetitive');
+  }
+
+  const words = normalized.split(/\s+/).filter(Boolean);
+  const uniqueWords = new Set(words.map((word) => word.toLowerCase()));
+  if (words.length >= 40 && uniqueWords.size <= Math.ceil(words.length * 0.45)) {
+    reasons.push('Vocabulary is repetitive and sounds synthetic');
+  }
+
+  return {
+    approved: reasons.length === 0,
+    mood,
+    reasons,
+  };
+}
 
 // Validate content quality
 export async function validateContent(

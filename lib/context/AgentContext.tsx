@@ -27,6 +27,8 @@ import { runGodModeAnalysis, quickIdeate, callCustomProvider, type GodModeResult
 import { analyzeMusicMood, type MusicMood } from '@/lib/services/musicEngine';
 import { AVAILABLE_MODELS } from '@/lib/services/aiService';
 import { kvGet, kvSet } from '@/lib/services/puterService';
+import { automationEngine } from '@/lib/core/AutomationEngine';
+import type { NexusRequest } from '@/lib/core';
 import { 
   orchestrate, 
   initializeOrchestrationSystem,
@@ -34,7 +36,7 @@ import {
   runBackgroundEvolution,
   type OrchestrationResult 
 } from '@/lib/services/orchestrationEngine';
-import { validateContent, makeGovernorDecision, getGovernorDashboard } from '@/lib/services/governorService';
+import { validateContent, makeGovernorDecision, getGovernorDashboard, evaluateMoodApproval } from '@/lib/services/governorService';
 import { getAgentStats, loadAgents, type AgentConfig } from '@/lib/services/multiAgentService';
 import { generateAgentImage, generateAgentVideo } from '@/lib/services/agentMediaService';
 import { fileProcessor } from '@/lib/services/fileProcessor';
@@ -42,8 +44,12 @@ import type { VideoProvider } from '@/lib/services/videoGenerationService';
 import type { ImageProvider } from '@/lib/services/imageGenerationService';
 import { generateContent } from '@/lib/services/contentEngine';
 import type { Platform } from '@/lib/types';
+import { loadProviderCapabilities, getRecommendedModel, type ProviderCapability } from '@/lib/services/providerCapabilityService';
+import { trackGenerationFailure, trackGenerationStart, trackGenerationSuccess } from '@/lib/services/generationTrackerService';
+import { syncPostedEngagements } from '@/lib/services/engagementSyncService';
 import { normalizeIncomingMessage, detectExplicitMediaIntent, buildFallbackChatMessages, isExplicitExecutionRequest } from './agentBehavior.mjs';
 import { ensureAgentSkillsInstalled, getEnabledAgentSkills, buildAgentSkillContext } from '@/lib/services/agentSkillService';
+import { CHAT_MODEL_EVENT_NAME, setActiveChatModel, type ChatModelDetail } from '@/lib/services/providerControl';
 
 const IMAGE_ENGINE_OPTIONS = [
   { model: 'puter', name: 'Puter Image' },
@@ -58,6 +64,139 @@ const VIDEO_ENGINE_OPTIONS = [
 ] as const;
 
 const AGENT_SESSION_KEY = 'agent_session_v1';
+const PROVIDER_CAPABILITY_CACHE_MS = 90_000;
+
+const AUTOMATION_START_PATTERN = /\b(start|run|launch|begin)\b.*\b(automation|autopilot|background|agent)\b/i;
+const AUTOMATION_STOP_PATTERN = /\b(stop|pause|halt|disable)\b.*\b(automation|autopilot|background|agent)\b/i;
+const WEAK_CONTENT_BRIEF_PATTERN = /^(create|make|generate|write)\s+(content|post|caption|image|video|reel|short|script)\b[.!?]*$/i;
+const GENERIC_IDEA_PATTERN = /\b(something|anything|whatever|random|any niche)\b/i;
+const COMMAND_PLATFORM_SET = new Set<Platform>([
+  'twitter',
+  'instagram',
+  'tiktok',
+  'linkedin',
+  'facebook',
+  'threads',
+  'youtube',
+  'pinterest',
+]);
+
+function extractQuotedOrTrailing(text: string, prefixPattern: RegExp): string | null {
+  const match = text.match(prefixPattern);
+  if (!match) return null;
+  const value = (match[1] || '').trim();
+  return value.length > 2 ? value : null;
+}
+
+function extractNicheHint(text: string): string | null {
+  return extractQuotedOrTrailing(
+    text,
+    /(?:^|\b)(?:my\s+)?niche\s*(?:is|=|:)\s*["']?(.{3,140}?)["']?(?:$|[.!?\n])/i
+  );
+}
+
+function extractIdeaHint(text: string): string | null {
+  const fromIdea = extractQuotedOrTrailing(
+    text,
+    /(?:^|\b)(?:content\s+idea|idea|post\s+idea)\s*(?:is|=|:)\s*["']?(.{8,240}?)["']?(?:$|[.!?\n])/i
+  );
+  if (fromIdea) return fromIdea;
+  return extractQuotedOrTrailing(
+    text,
+    /(?:^|\b)(?:make|create|generate|write)\s+(?:a\s+|an\s+)?(?:post|content|caption|thread|script)\s+(?:about|on)\s+["']?(.{8,240}?)["']?(?:$|[.!?\n])/i
+  );
+}
+
+function isWeakBrief(text: string): boolean {
+  const normalized = text.trim();
+  if (normalized.length < 24) return true;
+  if (WEAK_CONTENT_BRIEF_PATTERN.test(normalized)) return true;
+  if (GENERIC_IDEA_PATTERN.test(normalized)) return true;
+  return false;
+}
+
+function needsExecutionClarification(
+  intentType: AgentIntent['type'],
+  message: string,
+  hasFileContext: boolean,
+  memory: AgentMemory
+): { required: boolean; reasons: string[]; questions: string[] } {
+  if (!['generate_content', 'create_image', 'make_video'].includes(intentType)) {
+    return { required: false, reasons: [], questions: [] };
+  }
+
+  const reasons: string[] = [];
+  const questions: string[] = [];
+  const normalized = message.trim();
+  const nicheHint = extractNicheHint(normalized);
+  const ideaHint = extractIdeaHint(normalized);
+
+  const hasLockedNiche = Boolean((memory.niche || '').trim());
+  const hasSavedIdea = memory.contentIdeas.some((idea) => idea.status === 'new');
+
+  if (!hasLockedNiche && !nicheHint) {
+    reasons.push('No locked niche is set yet');
+    questions.push('What niche should I lock before generating?');
+  }
+
+  if (!hasFileContext && !ideaHint && !hasSavedIdea && isWeakBrief(normalized)) {
+    reasons.push('The brief is too vague to execute safely');
+    questions.push('What is the exact topic, audience outcome, and platform for this piece?');
+  }
+
+  if (intentType === 'create_image' || intentType === 'make_video') {
+    const hasVisualSpecifics = /\b(subject|scene|style|camera|lighting|mood|platform|duration|shot)\b/i.test(normalized);
+    if (!hasFileContext && !hasVisualSpecifics && isWeakBrief(normalized)) {
+      reasons.push('Media direction is under-specified');
+      questions.push('What should appear on screen, what style/mood, and which platform format?');
+    }
+  }
+
+  return { required: reasons.length > 0, reasons, questions: questions.slice(0, 3) };
+}
+
+type AgentCommand =
+  | { type: 'help' }
+  | { type: 'lock_niche'; value: string }
+  | { type: 'queue_idea'; value: string }
+  | { type: 'set_platforms'; platforms: Platform[] }
+  | { type: 'start'; payload?: string }
+  | { type: 'pause' }
+  | { type: 'status' }
+  | { type: 'approve'; outputId: string }
+  | { type: 'reject'; outputId: string }
+  | { type: 'run_now' }
+  | { type: 'sync_engagement' };
+
+function parseAgentCommand(input: string): AgentCommand | null {
+  const text = input.trim();
+  if (!text.startsWith('/')) return null;
+
+  const [rawCommand, ...rest] = text.slice(1).split(/\s+/);
+  const command = rawCommand.toLowerCase();
+  const args = rest.join(' ').trim();
+
+  if (command === 'help') return { type: 'help' };
+  if ((command === 'lock-niche' || command === 'niche') && args) return { type: 'lock_niche', value: args };
+  if ((command === 'queue-idea' || command === 'idea') && args) return { type: 'queue_idea', value: args };
+  if (command === 'platforms' && args) {
+    const platforms = args
+      .split(/[,\s]+/)
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean)
+      .filter((value): value is Platform => COMMAND_PLATFORM_SET.has(value as Platform));
+    return { type: 'set_platforms', platforms: Array.from(new Set(platforms)) };
+  }
+  if (command === 'start') return { type: 'start', payload: args || undefined };
+  if (command === 'pause' || command === 'stop') return { type: 'pause' };
+  if (command === 'status') return { type: 'status' };
+  if (command === 'approve' && args) return { type: 'approve', outputId: args };
+  if (command === 'reject' && args) return { type: 'reject', outputId: args };
+  if (command === 'run-now') return { type: 'run_now' };
+  if (command === 'sync-engagement') return { type: 'sync_engagement' };
+
+  return null;
+}
 
 interface AgentState {
   isOpen: boolean;
@@ -159,6 +298,10 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   });
 
   const initializedRef = useRef(false);
+  const providerCapabilitiesCacheRef = useRef<{
+    timestamp: number;
+    capabilities: ProviderCapability[];
+  } | null>(null);
 
   const saveSessionSnapshot = useCallback(async (nextState: AgentState) => {
     const snapshot: AgentSessionSnapshot = {
@@ -199,7 +342,11 @@ export function AgentProvider({ children }: { children: ReactNode }) {
         kvGet<VideoProvider>('video_provider'),
         restoreSessionSnapshot(),
       ]);
-      await ensureAgentSkillsInstalled();
+      await Promise.all([
+        ensureAgentSkillsInstalled(),
+        automationEngine.initialize().catch(() => {}),
+      ]);
+      const automationState = automationEngine.getState();
 
       setState(s => ({
         ...s,
@@ -225,7 +372,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
             : savedVideoProvider === 'ltx23-open' || savedVideoProvider === 'ltx23'
             ? savedVideoProvider
             : s.currentVideoProvider,
-        automationEnabled: sessionSnapshot?.automationEnabled ?? s.automationEnabled,
+        automationEnabled: automationState.isRunning,
         isVoiceMode: sessionSnapshot?.isVoiceMode ?? s.isVoiceMode,
         multiAgentEnabled: sessionSnapshot?.multiAgentEnabled ?? s.multiAgentEnabled,
       }));
@@ -257,6 +404,20 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     state.multiAgentEnabled,
     saveSessionSnapshot,
   ]);
+
+  useEffect(() => {
+    const handleChatModelState = (event: Event) => {
+      const customEvent = event as CustomEvent<ChatModelDetail>;
+      const nextModel = customEvent.detail?.model;
+      if (!nextModel) return;
+      setState((s) => (s.currentModel === nextModel ? s : { ...s, currentModel: nextModel }));
+    };
+
+    window.addEventListener(CHAT_MODEL_EVENT_NAME, handleChatModelState as EventListener);
+    return () => {
+      window.removeEventListener(CHAT_MODEL_EVENT_NAME, handleChatModelState as EventListener);
+    };
+  }, []);
 
   const openAgent = useCallback(() => {
     loadHistory();
@@ -347,8 +508,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   // Model switching
   const setModel = useCallback((model: string) => {
     setState(s => ({ ...s, currentModel: model }));
-    kvSet('default_model', model);
-    kvSet('ai_model', model);
+    void setActiveChatModel(model);
   }, []);
 
   const setImageProvider = useCallback((provider: ImageProvider) => {
@@ -363,7 +523,20 @@ export function AgentProvider({ children }: { children: ReactNode }) {
 
   // Automation toggle
   const toggleAutomation = useCallback(() => {
-    setState(s => ({ ...s, automationEnabled: !s.automationEnabled }));
+    void (async () => {
+      try {
+        await automationEngine.initialize();
+        const nextRunning = await automationEngine.toggle();
+        const autoState = automationEngine.getState();
+        setState((s) => ({
+          ...s,
+          automationEnabled: nextRunning,
+          currentTask: nextRunning ? `Background automation started (next run ${autoState.nextRun ? new Date(autoState.nextRun).toLocaleTimeString() : 'soon'})` : 'Background automation stopped',
+        }));
+      } catch (error) {
+        console.error('Automation toggle failed:', error);
+      }
+    })();
   }, []);
 
   // Voice mode
@@ -518,6 +691,126 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     return ['instagram', 'tiktok'];
   };
 
+  const getProviderCapabilitiesCached = useCallback(async (): Promise<ProviderCapability[]> => {
+    const cached = providerCapabilitiesCacheRef.current;
+    if (cached && Date.now() - cached.timestamp < PROVIDER_CAPABILITY_CACHE_MS) {
+      return cached.capabilities;
+    }
+
+    const capabilities = await loadProviderCapabilities();
+    providerCapabilitiesCacheRef.current = {
+      timestamp: Date.now(),
+      capabilities,
+    };
+    return capabilities;
+  }, []);
+
+  const resolveExecutionModel = useCallback(async (
+    task: 'chat' | 'vision' | 'code' | 'creative' | 'analysis' | 'fast'
+  ): Promise<string> => {
+    try {
+      const capabilities = await getProviderCapabilitiesCached();
+      let recommended = getRecommendedModel(task, capabilities);
+      if (!recommended) {
+        const fallbackProvider = capabilities.find(
+          (provider) =>
+            provider.apiKeyConfigured &&
+            provider.status !== 'offline' &&
+            provider.models.some((model) => !model.deprecated)
+        );
+        const fallbackModel = fallbackProvider?.models.find((model) => model.recommended && !model.deprecated)
+          || fallbackProvider?.models.find((model) => !model.deprecated);
+
+        if (fallbackProvider && fallbackModel) {
+          recommended = { providerId: fallbackProvider.id, modelId: fallbackModel.id };
+        }
+      }
+      if (!recommended) return state.currentModel;
+
+      const match = AVAILABLE_MODELS.find((model) => model.model === recommended.modelId);
+      if (!match) return state.currentModel;
+      if (match.model === state.currentModel) return state.currentModel;
+
+      await setActiveChatModel(match.model);
+      setState((s) => ({ ...s, currentModel: match.model }));
+      return match.model;
+    } catch (error) {
+      console.warn('Execution model resolution failed, using current model:', error);
+      return state.currentModel;
+    }
+  }, [getProviderCapabilitiesCached, state.currentModel]);
+
+  const queueAndStartBackgroundAutomation = useCallback(async (
+    message: string
+  ): Promise<{ ok: boolean; response: string }> => {
+    const nicheHint = extractNicheHint(message);
+    const ideaHint = extractIdeaHint(message);
+
+    if (nicheHint) {
+      await setPrimaryNiche(nicheHint);
+      await addNicheDetail(nicheHint);
+    }
+    if (ideaHint) {
+      await addContentIdea(ideaHint, 'user_stated');
+    }
+
+    const memory = await loadAgentMemory();
+    const activeNiche = (memory.niche || nicheHint || '').trim();
+    const selectedIdea =
+      memory.contentIdeas
+        .slice()
+        .reverse()
+        .find((idea) => idea.status === 'new') || null;
+
+    if (!activeNiche) {
+      return {
+        ok: false,
+        response: 'I am not starting background automation yet. I need a locked niche first. Tell me: "My niche is ...".',
+      };
+    }
+
+    if (!selectedIdea) {
+      return {
+        ok: false,
+        response: 'I am not starting background automation yet. I need a concrete content idea in memory first. Tell me one specific idea.',
+      };
+    }
+
+    const platforms = memory.targetPlatforms.filter(
+      (platform): platform is Platform =>
+        ['twitter', 'instagram', 'tiktok', 'linkedin', 'facebook', 'threads', 'youtube', 'pinterest'].includes(platform)
+    );
+    const platform = platforms[0] || 'instagram';
+
+    const request: NexusRequest = {
+      userInput: `Create high-engagement, niche-locked content.\n- Niche: ${activeNiche}\n- Idea: ${selectedIdea.idea}`,
+      taskType: 'content',
+      platform,
+      customInstructions: 'Do not assume missing details. If required details are missing, ask concise questions first. If the idea is weak, reject it politely with concrete reasons and a stronger replacement.',
+    };
+
+    await automationEngine.initialize();
+    await automationEngine.addToQueue(request);
+    const started = await automationEngine.start();
+
+    if (started) {
+      setState((s) => ({ ...s, automationEnabled: true }));
+      void automationEngine.runCycle();
+      const autoState = automationEngine.getState();
+      return {
+        ok: true,
+        response: `Background automation is running. Locked niche: ${activeNiche}. Queued idea: ${selectedIdea.idea}. Next run: ${
+          autoState.nextRun ? new Date(autoState.nextRun).toLocaleTimeString() : 'scheduled'
+        }.`,
+      };
+    }
+
+    return {
+      ok: false,
+      response: 'Automation did not start because it is currently paused by safety/failure guardrails. Clear the pause from the Nexus automation controls and retry.',
+    };
+  }, []);
+
   const formatGeneratedContentResponse = (
     generated: Awaited<ReturnType<typeof generateContent>>
   ): string => {
@@ -626,7 +919,40 @@ Rules:
       console.error('Governor enforcement error:', error);
     }
 
-    return candidate || original;
+    let finalCandidate = candidate || original;
+
+    try {
+      for (let moodPass = 0; moodPass < 2; moodPass++) {
+        const moodApproval = await evaluateMoodApproval(finalCandidate);
+        setState((s) => ({ ...s, currentMusicMood: moodApproval.mood }));
+
+        if (moodApproval.approved) {
+          return finalCandidate;
+        }
+
+        const humanized = await universalChat(
+          [
+            {
+              role: 'system',
+              content: 'Rewrite the response to sound naturally human, emotionally grounded, and conversational. Avoid robotic or corporate phrasing. Return only final response text.',
+            },
+            {
+              role: 'user',
+              content: `User request:\n${options.request || 'N/A'}\n\nCurrent response:\n${finalCandidate}\n\nMood target:\n- Primary: ${moodApproval.mood.primary}\n- Tempo: ${moodApproval.mood.tempo}\n- Energy: ${moodApproval.mood.energy}\n\nFix these issues:\n${moodApproval.reasons.map((reason) => `- ${reason}`).join('\n')}`,
+            },
+          ],
+          { model: state.currentModel, brandKit: options.brandKit || undefined }
+        );
+
+        if (humanized && humanized.trim()) {
+          finalCandidate = humanized.trim();
+        }
+      }
+    } catch (error) {
+      console.error('Mood enforcement error:', error);
+    }
+
+    return finalCandidate;
   }, [state.currentModel]);
 
   const buildFailureOutput = useCallback(async (
@@ -876,14 +1202,198 @@ Rules:
     // Save user message
     await saveChatMessage(userMessage);
 
+    let trackedGenerationId: string | null = null;
     try {
+      const postCommandResponse = async (message: string) => {
+        const assistantMessage: ChatMessage = {
+          id: generateId(),
+          role: 'assistant',
+          content: message,
+          timestamp: new Date().toISOString(),
+        };
+        setState((s) => ({
+          ...s,
+          messages: [...s.messages, assistantMessage],
+          isThinking: false,
+          currentTask: null,
+        }));
+        await saveChatMessage(assistantMessage);
+      };
+
+      const command = parseAgentCommand(normalizedContent);
+      if (command) {
+        if (command.type === 'help') {
+          await postCommandResponse(
+            [
+              'Command mode:',
+              '- /lock-niche <niche>',
+              '- /queue-idea <idea>',
+              '- /platforms instagram,tiktok,linkedin',
+              '- /start [optional idea text]',
+              '- /run-now',
+              '- /pause',
+              '- /status',
+              '- /approve <automation_output_id>',
+              '- /reject <automation_output_id>',
+              '- /sync-engagement',
+            ].join('\n')
+          );
+          return;
+        }
+
+        if (command.type === 'lock_niche') {
+          await setPrimaryNiche(command.value);
+          await addNicheDetail(command.value);
+          await postCommandResponse(`Locked niche set to: ${command.value}`);
+          return;
+        }
+
+        if (command.type === 'queue_idea') {
+          await addContentIdea(command.value, 'user_stated');
+          await postCommandResponse(`Idea queued in memory: ${command.value}`);
+          return;
+        }
+
+        if (command.type === 'set_platforms') {
+          if (command.platforms.length === 0) {
+            await postCommandResponse('No valid platforms found. Use: twitter, instagram, tiktok, linkedin, facebook, threads, youtube, pinterest.');
+            return;
+          }
+          for (const platform of command.platforms) {
+            await addTargetPlatform(platform);
+          }
+          await postCommandResponse(`Target platforms updated: ${command.platforms.join(', ')}`);
+          return;
+        }
+
+        if (command.type === 'start') {
+          const response = await queueAndStartBackgroundAutomation(command.payload || normalizedContent);
+          await postCommandResponse(response.response);
+          return;
+        }
+
+        if (command.type === 'pause') {
+          await automationEngine.stop();
+          setState((s) => ({ ...s, automationEnabled: false }));
+          await postCommandResponse('Background automation is paused.');
+          return;
+        }
+
+        if (command.type === 'status') {
+          await automationEngine.initialize();
+          const memory = await loadAgentMemory();
+          const autoState = automationEngine.getState();
+          const queue = automationEngine.getQueueDetails();
+          const deadLetters = automationEngine.getDeadLetters();
+          const pendingApprovals = automationEngine.getOutputs({ status: 'pending' }).length;
+          await postCommandResponse(
+            [
+              `Automation: ${autoState.isRunning ? 'running' : 'paused'}`,
+              `Locked niche: ${memory.niche || 'not set'}`,
+              `Queued jobs: ${queue.length}`,
+              `Dead-letter jobs: ${deadLetters.length}`,
+              `Pending approvals: ${pendingApprovals}`,
+              `Consecutive failures: ${autoState.consecutiveFailures}`,
+              `Next run: ${autoState.nextRun ? new Date(autoState.nextRun).toLocaleString() : 'not scheduled'}`,
+            ].join('\n')
+          );
+          return;
+        }
+
+        if (command.type === 'approve') {
+          const approved = await automationEngine.approveOutput(command.outputId);
+          await postCommandResponse(
+            approved
+              ? `Approved automation output: ${command.outputId}`
+              : `Could not approve ${command.outputId}. Verify the output id.`
+          );
+          return;
+        }
+
+        if (command.type === 'reject') {
+          const rejected = await automationEngine.rejectOutput(command.outputId);
+          await postCommandResponse(
+            rejected
+              ? `Rejected automation output: ${command.outputId}`
+              : `Could not reject ${command.outputId}. Verify the output id.`
+          );
+          return;
+        }
+
+        if (command.type === 'run_now') {
+          await automationEngine.initialize();
+          await automationEngine.start();
+          void automationEngine.runCycle();
+          setState((s) => ({ ...s, automationEnabled: true }));
+          await postCommandResponse('Triggered one immediate automation run in the background.');
+          return;
+        }
+
+        if (command.type === 'sync_engagement') {
+          const report = await syncPostedEngagements({ limit: 40 });
+          await postCommandResponse(
+            `Engagement sync complete. Checked: ${report.checked}, Updated: ${report.updated}, Skipped: ${report.skipped}, Errors: ${report.errors.length}`
+          );
+          return;
+        }
+      }
+
       // Detect intent
       const intent = await detectIntent(normalizedContent, attachedFiles.length > 0);
       setState(s => ({ ...s, currentTask: `${intent.type.replace('_', ' ')}...` }));
 
+      const automationStopRequested = AUTOMATION_STOP_PATTERN.test(normalizedContent);
+      if (automationStopRequested) {
+        await automationEngine.stop();
+        setState((s) => ({ ...s, automationEnabled: false }));
+
+        const approvedStopResponse = await enforceGovernorApproval(
+          'Background automation is now stopped. Queue remains saved, and nothing else will run until you explicitly start it again.',
+          { request: normalizedContent }
+        );
+        const stopMessage: ChatMessage = {
+          id: generateId(),
+          role: 'assistant',
+          content: approvedStopResponse,
+          timestamp: new Date().toISOString(),
+        };
+        setState((s) => ({
+          ...s,
+          messages: [...s.messages, stopMessage],
+          isThinking: false,
+          currentTask: null,
+        }));
+        await saveChatMessage(stopMessage);
+        return;
+      }
+
+      const automationStartRequested = AUTOMATION_START_PATTERN.test(normalizedContent);
+      if (automationStartRequested) {
+        const automationResult = await queueAndStartBackgroundAutomation(normalizedContent);
+        const approvedStartResponse = await enforceGovernorApproval(automationResult.response, {
+          request: normalizedContent,
+        });
+
+        const startMessage: ChatMessage = {
+          id: generateId(),
+          role: 'assistant',
+          content: approvedStartResponse,
+          timestamp: new Date().toISOString(),
+        };
+
+        setState((s) => ({
+          ...s,
+          messages: [...s.messages, startMessage],
+          isThinking: false,
+          currentTask: null,
+        }));
+        await saveChatMessage(startMessage);
+        return;
+      }
+
       // Load brand kit for context
       const brandKit = await loadBrandKit();
-      const model = state.currentModel;
+      let activeModel = state.currentModel;
       
       // Load persistent memory context
       const memoryContext = await buildMemoryContext();
@@ -916,10 +1426,59 @@ Rules:
         userPrompt = `${normalizedContent}\n\n--- Attached Files ---\n${fileContext}`;
       }
 
+      const memorySnapshot = await loadAgentMemory();
+      const executionClarification = needsExecutionClarification(
+        intent.type,
+        normalizedContent,
+        Boolean(fileContext.trim()),
+        memorySnapshot
+      );
+
+      if (executionClarification.required) {
+        const clarificationReply = [
+          'I am pausing execution until these details are explicit:',
+          ...executionClarification.reasons.map((reason) => `- ${reason}`),
+          '',
+          'Reply with:',
+          ...executionClarification.questions.map((question, index) => `${index + 1}. ${question}`),
+        ].join('\n');
+
+        const approvedClarification = await enforceGovernorApproval(clarificationReply, {
+          request: normalizedContent,
+          brandKit,
+        });
+
+        const clarificationMessage: ChatMessage = {
+          id: generateId(),
+          role: 'assistant',
+          content: approvedClarification,
+          timestamp: new Date().toISOString(),
+        };
+
+        setState((s) => ({
+          ...s,
+          messages: [...s.messages, clarificationMessage],
+          isThinking: false,
+          currentTask: null,
+        }));
+
+        await saveChatMessage(clarificationMessage);
+        return;
+      }
+
       if (intent.type === 'create_image') {
+        activeModel = await resolveExecutionModel('vision');
+        const tracked = await trackGenerationStart({
+          source: 'agent',
+          taskType: 'create_image',
+          idea: normalizedContent,
+          platforms: [],
+        });
+        trackedGenerationId = tracked.record.id;
+
         setState(s => ({ ...s, currentTask: 'Generating image...' }));
         const imageResult = await generateAgentImage(userPrompt, {
-          preferredModel: state.currentModel,
+          preferredModel: activeModel,
           provider: state.currentImageProvider,
         });
         const approvedContent = await enforceGovernorApproval(imageResult.content, {
@@ -943,6 +1502,10 @@ Rules:
         }));
 
         await saveChatMessage(assistantMessage);
+        await trackGenerationSuccess(tracked.record.id, {
+          artifactId: assistantMessage.id,
+          artifactType: 'draft',
+        });
         await extractAndSaveMemory(normalizedContent, approvedContent, intent);
         return;
       }
@@ -956,9 +1519,18 @@ Rules:
         const regenerationPrompt = `${lastMedia.userRequest}\n\nRegeneration instructions: ${normalizedContent}\n\nPrevious generation prompt:\n${lastMedia.prompt}`;
 
         if (lastMedia.kind === 'image') {
+          activeModel = await resolveExecutionModel('vision');
+          const tracked = await trackGenerationStart({
+            source: 'agent',
+            taskType: 'regenerate_image',
+            idea: `${lastMedia.userRequest}\n${normalizedContent}`,
+            platforms: [],
+          });
+          trackedGenerationId = tracked.record.id;
+
           setState(s => ({ ...s, currentTask: 'Regenerating image...' }));
           const imageResult = await generateAgentImage(regenerationPrompt, {
-            preferredModel: state.currentModel,
+            preferredModel: activeModel,
             provider: state.currentImageProvider,
           });
           const approvedContent = await enforceGovernorApproval(imageResult.content, {
@@ -982,13 +1554,26 @@ Rules:
           }));
 
           await saveChatMessage(assistantMessage);
+          await trackGenerationSuccess(tracked.record.id, {
+            artifactId: assistantMessage.id,
+            artifactType: 'draft',
+          });
           await extractAndSaveMemory(normalizedContent, approvedContent, intent);
           return;
         }
 
+        activeModel = await resolveExecutionModel('creative');
+        const tracked = await trackGenerationStart({
+          source: 'agent',
+          taskType: 'regenerate_video',
+          idea: `${lastMedia.userRequest}\n${normalizedContent}`,
+          platforms: [],
+        });
+        trackedGenerationId = tracked.record.id;
+
         setState(s => ({ ...s, currentTask: 'Regenerating video...' }));
         const videoResult = await generateAgentVideo(regenerationPrompt, {
-          preferredModel: state.currentModel,
+          preferredModel: activeModel,
           provider: state.currentVideoProvider,
         });
         const approvedContent = await enforceGovernorApproval(videoResult.content, {
@@ -1012,14 +1597,27 @@ Rules:
         }));
 
         await saveChatMessage(assistantMessage);
+        await trackGenerationSuccess(tracked.record.id, {
+          artifactId: assistantMessage.id,
+          artifactType: 'draft',
+        });
         await extractAndSaveMemory(normalizedContent, approvedContent, intent);
         return;
       }
 
       if (intent.type === 'make_video') {
+        activeModel = await resolveExecutionModel('creative');
+        const tracked = await trackGenerationStart({
+          source: 'agent',
+          taskType: 'make_video',
+          idea: normalizedContent,
+          platforms: [],
+        });
+        trackedGenerationId = tracked.record.id;
+
         setState(s => ({ ...s, currentTask: 'Generating video...' }));
         const videoResult = await generateAgentVideo(userPrompt, {
-          preferredModel: state.currentModel,
+          preferredModel: activeModel,
           provider: state.currentVideoProvider,
         });
         const approvedContent = await enforceGovernorApproval(videoResult.content, {
@@ -1043,13 +1641,25 @@ Rules:
         }));
 
         await saveChatMessage(assistantMessage);
+        await trackGenerationSuccess(tracked.record.id, {
+          artifactId: assistantMessage.id,
+          artifactType: 'draft',
+        });
         await extractAndSaveMemory(normalizedContent, approvedContent, intent);
         return;
       }
 
       if (intent.type === 'generate_content') {
         setState(s => ({ ...s, currentTask: 'Generating content...' }));
+        activeModel = await resolveExecutionModel('creative');
         const platforms = await inferPlatformsFromContext(normalizedContent);
+        const tracked = await trackGenerationStart({
+          source: 'agent',
+          taskType: 'generate_content',
+          idea: normalizedContent,
+          platforms,
+        });
+        trackedGenerationId = tracked.record.id;
         const generated = await generateContent({
           idea: fileContext ? `${normalizedContent}\n\nSource material:\n${fileContext}` : normalizedContent,
           platforms,
@@ -1079,6 +1689,10 @@ Rules:
         }));
 
         await saveChatMessage(assistantMessage);
+        await trackGenerationSuccess(tracked.record.id, {
+          artifactId: assistantMessage.id,
+          artifactType: 'draft',
+        });
         await extractAndSaveMemory(normalizedContent, generatedResponse, { ...intent, type: 'generate_content' });
         return;
       }
@@ -1094,6 +1708,16 @@ Rules:
         userPrompt += '\n\nKeep this conversational and natural. Do not auto-generate posts, scripts, images, or videos unless the user explicitly requests execution.';
       }
 
+      activeModel = await resolveExecutionModel(
+        intent.type === 'read_file'
+          ? 'analysis'
+          : intent.type === 'manage_brand'
+          ? 'analysis'
+          : intent.type === 'answer_question' && normalizedContent.length > 220
+          ? 'analysis'
+          : 'chat'
+      );
+
       // Call AI
       const response = await universalChat(
         [
@@ -1101,7 +1725,7 @@ Rules:
           ...contextMessages,
           { role: 'user', content: userPrompt },
         ],
-        { model, brandKit }
+        { model: activeModel, brandKit }
       );
       const approvedResponse = await enforceGovernorApproval(response, {
         brandKit,
@@ -1132,6 +1756,16 @@ Rules:
 
     } catch (error) {
       console.error('Agent error:', error);
+      if (trackedGenerationId) {
+        try {
+          await trackGenerationFailure(
+            trackedGenerationId,
+            error instanceof Error ? error.message : 'Unexpected generation error'
+          );
+        } catch (trackingError) {
+          console.warn('Failed to track generation failure:', trackingError);
+        }
+      }
 
       try {
         const fallback = await buildFailureOutput(
@@ -1185,6 +1819,8 @@ Rules:
     buildFailureOutput,
     enforceGovernorApproval,
     getLastMediaContext,
+    queueAndStartBackgroundAutomation,
+    resolveExecutionModel,
     state.currentModel,
     state.currentImageProvider,
     state.currentVideoProvider,
@@ -1208,10 +1844,28 @@ Rules:
       await initializeOrchestrationSystem();
       
       // Run orchestration
-      const result = await orchestrate(request, {
+      let result = await orchestrate(request, {
         requestType: type,
         preferredModel: state.currentModel,
       });
+
+      if (result.success && result.finalContent.trim()) {
+        const brandKit = await loadBrandKit();
+        const approvedFinal = await enforceGovernorApproval(result.finalContent, {
+          request,
+          brandKit,
+        });
+        if (approvedFinal && approvedFinal.trim()) {
+          result = {
+            ...result,
+            finalContent: approvedFinal.trim(),
+            orchestrationPlan: {
+              ...result.orchestrationPlan,
+              finalOutput: approvedFinal.trim(),
+            },
+          };
+        }
+      }
       
       setState(s => ({ 
         ...s, 
@@ -1226,7 +1880,7 @@ Rules:
       setState(s => ({ ...s, isThinking: false, currentTask: null }));
       return null;
     }
-  }, [state.currentModel]);
+  }, [enforceGovernorApproval, state.currentModel]);
 
   const getSystemStatus = useCallback(async () => {
     const status = await getOrchestrationStatus();

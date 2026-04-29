@@ -28,6 +28,7 @@ import { AVAILABLE_MODELS } from '@/lib/services/aiService';
 import {
   isPuterFallbackDisabled,
   resolveProviderForModel,
+  setActiveChatModel,
   setPuterFallbackDisabled,
 } from '@/lib/services/providerControl';
 
@@ -96,10 +97,7 @@ export default function ProvidersPage() {
     setCurrentChatModel(model);
     setRoutingBusy(true);
     try {
-      await Promise.all([
-        kvSet('ai_model', model),
-        kvSet('default_model', model),
-      ]);
+      await setActiveChatModel(model);
     } finally {
       setRoutingBusy(false);
     }
