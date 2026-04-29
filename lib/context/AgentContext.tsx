@@ -91,6 +91,8 @@ const CONTINUATION_CUE_PATTERN = /^\s*(continue|go on|proceed|carry on|keep goin
 const CAPABILITIES_REQUEST_PATTERN = /\b(what can you do|what do you do|your capabilities|capabilities|what are you capable of|help me understand what you can do)\b/i;
 const PLANNING_VISIBILITY_PATTERN = /\b(what(?:'s| is)?\s+(?:it\s+)?planning|show\s+(?:me\s+)?(?:the\s+)?(?:plan|queue|schedule|scheduled|upcoming)|what(?:'s| is)\s+scheduled|automation\s+status|queue\s+status|planner\s+status)\b/i;
 const DELETE_ACTION_PATTERN = /\b(delete|remove|cancel|unschedule)\b[\s\S]{0,24}\b(it|this|that|latest|last|schedule|scheduled|queue|queued|plan)\b/i;
+const BULK_SCHEDULE_PATTERN = /\bbulk\s+(schedule|scheduling|posting|post)\b/i;
+const BULK_SCHEDULE_EXECUTION_PATTERN = /\b(run|start|execute|do|import|queue|schedule)\b[\s\S]{0,30}\bbulk\s+(schedule|scheduling|posting|post)\b/i;
 const UNIVERSAL_SCENE_DIRECTIVE = [
   'Scene generation constraints:',
   '- Keep mystery over explanation; never explain rituals, lore, or magic systems.',
@@ -401,6 +403,14 @@ function wantsDeleteLatestItem(message: string): boolean {
   return DELETE_ACTION_PATTERN.test(message.trim().toLowerCase());
 }
 
+function wantsBulkSchedule(message: string): boolean {
+  return BULK_SCHEDULE_PATTERN.test(message.trim().toLowerCase());
+}
+
+function wantsBulkScheduleExecution(message: string): boolean {
+  return BULK_SCHEDULE_EXECUTION_PATTERN.test(message.trim().toLowerCase());
+}
+
 function buildCapabilitiesReply(options: {
   currentModel: string;
   imageProvider: ImageProvider;
@@ -416,6 +426,7 @@ function buildCapabilitiesReply(options: {
     '- Analyze attached PDFs/files page by page and extract grounded content ideas.',
     '- Save brand memory (niche, audience, character lock, style rules) and reuse it automatically.',
     '- Schedule content into the built-in scheduler and queue it for posting workers.',
+    '- Run bulk scheduling from CSV or batch inputs via /bulk-schedule and queue jobs for execution.',
     '- Run background automation loops and sync engagement metrics.',
     `- System status: automation ${options.automationEnabled ? 'running' : 'paused'}, multi-agent ${options.multiAgentEnabled ? 'enabled' : 'disabled'}.`,
     '',
@@ -1746,6 +1757,29 @@ Rules:
             .filter(Boolean)
             .join('\n')
         );
+        return;
+      }
+
+      if (attachedFiles.length === 0 && wantsBulkSchedule(normalizedContent)) {
+        if (wantsBulkScheduleExecution(normalizedContent)) {
+          await postCommandResponse(
+            [
+              'Bulk scheduling is wired.',
+              'To execute now, either:',
+              '1. Open /bulk-schedule and upload your CSV template.',
+              '2. Paste your batch posts here, and I will queue them into the built-in scheduler.',
+              'CSV columns: text,image_url,platforms,schedule_date,hashtags',
+            ].join('\n')
+          );
+        } else {
+          await postCommandResponse(
+            [
+              'Yes. Bulk scheduling is supported here.',
+              'I can run it through the built-in /bulk-schedule flow or from chat with a batch payload.',
+              'When you are ready, say: "Run bulk schedule now" and provide your CSV/posts.',
+            ].join('\n')
+          );
+        }
         return;
       }
 
