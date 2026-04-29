@@ -3,7 +3,7 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, type ReactNode } from 'react';
 import type { ChatMessage, AttachedFile, AgentIntent, AIMessage } from '@/lib/types';
 import { universalChat, analyzeImage, getCurrentModel } from '@/lib/services/aiService';
-import { saveChatMessage, loadChatHistory, loadBrandKit, generateId, clearChatHistory, addToSchedule, loadSchedule } from '@/lib/services/memoryService';
+import { saveChatMessage, loadChatHistory, loadBrandKit, generateId, clearChatHistory, addToSchedule, loadSchedule, removeFromSchedule } from '@/lib/services/memoryService';
 import { 
   loadAgentMemory, 
   buildMemoryContext, 
@@ -56,7 +56,7 @@ import { normalizeIncomingMessage, detectExplicitMediaIntent, buildFallbackChatM
 import { ensureAgentSkillsInstalled, getEnabledAgentSkills, buildAgentSkillContext } from '@/lib/services/agentSkillService';
 import { CHAT_MODEL_EVENT_NAME, setActiveChatModel, type ChatModelDetail } from '@/lib/services/providerControl';
 import { draftsService } from '@/lib/services/draftsService';
-import { enqueuePostJob, loadQueuedPostJobs } from '@/lib/services/postQueueService';
+import { enqueuePostJob, loadQueuedPostJobs, removeQueuedPostJob } from '@/lib/services/postQueueService';
 import { getNextBestTime } from '@/lib/services/bestTimeService';
 
 const IMAGE_ENGINE_OPTIONS = [
@@ -90,6 +90,7 @@ const ADMIN_ASSISTANT_MESSAGE_PATTERN = /^(command mode:|locked niche set to:|id
 const CONTINUATION_CUE_PATTERN = /^\s*(continue|go on|proceed|carry on|keep going|do it|do that)\s*[.!?]*$/i;
 const CAPABILITIES_REQUEST_PATTERN = /\b(what can you do|what do you do|your capabilities|capabilities|what are you capable of|help me understand what you can do)\b/i;
 const PLANNING_VISIBILITY_PATTERN = /\b(what(?:'s| is)?\s+(?:it\s+)?planning|show\s+(?:me\s+)?(?:the\s+)?(?:plan|queue|schedule|scheduled|upcoming)|what(?:'s| is)\s+scheduled|automation\s+status|queue\s+status|planner\s+status)\b/i;
+const DELETE_ACTION_PATTERN = /\b(delete|remove|cancel|unschedule)\b[\s\S]{0,24}\b(it|this|that|latest|last|schedule|scheduled|queue|queued|plan)\b/i;
 const UNIVERSAL_SCENE_DIRECTIVE = [
   'Scene generation constraints:',
   '- Keep mystery over explanation; never explain rituals, lore, or magic systems.',
@@ -394,6 +395,10 @@ function isCapabilitiesRequest(message: string): boolean {
 
 function wantsPlanningVisibility(message: string): boolean {
   return PLANNING_VISIBILITY_PATTERN.test(message.trim().toLowerCase());
+}
+
+function wantsDeleteLatestItem(message: string): boolean {
+  return DELETE_ACTION_PATTERN.test(message.trim().toLowerCase());
 }
 
 function buildCapabilitiesReply(options: {
@@ -1737,6 +1742,70 @@ Rules:
             `Planned ideas in memory: ${ideaLines.length === 1 && ideaLines[0] === 'none' ? 'none' : ''}`,
             ...ideaLines,
             'Dashboards: /calendar for schedule, /drafts for draft states, /approvals for pending approvals, /diagnostics for workers.',
+          ]
+            .filter(Boolean)
+            .join('\n')
+        );
+        return;
+      }
+
+      if (attachedFiles.length === 0 && wantsDeleteLatestItem(normalizedContent)) {
+        const [queue, schedule] = await Promise.all([
+          loadQueuedPostJobs(),
+          loadSchedule(),
+        ]);
+
+        const latestSchedule = [...schedule]
+          .reverse()
+          .find((post) => post.status === 'pending' || post.status === 'publishing') || null;
+
+        const pendingQueue = [...queue]
+          .reverse()
+          .filter((job) => job.status === 'queued' || job.status === 'processing');
+
+        const linkedQueueJob = latestSchedule
+          ? pendingQueue.find((job) => {
+              const platformOverlap = job.platforms.some((platform) => latestSchedule.platforms.includes(platform));
+              if (!platformOverlap) return false;
+              if (!latestSchedule.scheduledAt || !job.scheduledAt) return true;
+              const timeDiff = Math.abs(
+                new Date(latestSchedule.scheduledAt).getTime() - new Date(job.scheduledAt).getTime()
+              );
+              return timeDiff <= 5 * 60 * 1000;
+            }) || null
+          : null;
+        const latestQueueJob = linkedQueueJob || pendingQueue[0] || null;
+
+        let removedSchedule = false;
+        let removedQueue = false;
+
+        if (latestSchedule) {
+          removedSchedule = await removeFromSchedule(latestSchedule.id);
+          if (removedSchedule) {
+            await draftsService.updateStatus(latestSchedule.draftId, 'draft');
+          }
+        }
+
+        if (latestQueueJob) {
+          removedQueue = await removeQueuedPostJob(latestQueueJob.id);
+        }
+
+        if (!removedSchedule && !removedQueue) {
+          await postCommandResponse(
+            'There is nothing pending to delete right now. I could not find a queued job or scheduled post.'
+          );
+          return;
+        }
+
+        await postCommandResponse(
+          [
+            'Deleted.',
+            removedSchedule && latestSchedule
+              ? `Removed scheduled post: ${latestSchedule.id} (${latestSchedule.platforms.join(', ')})`
+              : '',
+            removedQueue && latestQueueJob
+              ? `Removed queue job: ${latestQueueJob.id}`
+              : '',
           ]
             .filter(Boolean)
             .join('\n')

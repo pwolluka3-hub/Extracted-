@@ -83,3 +83,13 @@ export async function updateQueuedPostJob(jobId: string, updates: Partial<Queued
   );
   await writeQueue(next);
 }
+
+export async function removeQueuedPostJob(jobId: string): Promise<boolean> {
+  const queue = await readQueue();
+  const next = queue.filter((job) => job.id !== jobId);
+  const removed = next.length !== queue.length;
+  if (removed) {
+    await writeQueue(next);
+  }
+  return removed;
+}
