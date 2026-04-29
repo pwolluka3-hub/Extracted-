@@ -4,7 +4,12 @@ import { useEffect } from 'react';
 import { loadSettings } from '@/lib/services/memoryService';
 import { notificationService } from '@/lib/services/notificationService';
 import { toast } from '@/hooks/use-toast';
-import { PROVIDER_EVENT_NAME, type ProviderEventDetail } from '@/lib/services/providerControl';
+import {
+  PROVIDER_EVENT_NAME,
+  PROVIDER_STATE_EVENT_NAME,
+  type ProviderEventDetail,
+  type ProviderStateDetail,
+} from '@/lib/services/providerControl';
 
 export function NotificationBootstrap() {
   useEffect(() => {
@@ -60,15 +65,30 @@ export function NotificationBootstrap() {
       });
     };
 
+    const handleProviderState = (event: Event) => {
+      const customEvent = event as CustomEvent<ProviderStateDetail>;
+      const detail = customEvent.detail;
+      if (!detail) return;
+
+      toast({
+        title: detail.disablePuterFallback ? 'Puter fallback disabled' : 'Puter fallback enabled',
+        description: detail.disablePuterFallback
+          ? 'Chat will stay on your selected provider instead of routing back into Puter automatically.'
+          : 'Chat can use Puter again as an automatic fallback when other providers fail.',
+      });
+    };
+
     window.addEventListener('offline', handleOffline);
     window.addEventListener('online', handleOnline);
     window.addEventListener(PROVIDER_EVENT_NAME, handleProviderEvent as EventListener);
+    window.addEventListener(PROVIDER_STATE_EVENT_NAME, handleProviderState as EventListener);
 
     return () => {
       mounted = false;
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener(PROVIDER_EVENT_NAME, handleProviderEvent as EventListener);
+      window.removeEventListener(PROVIDER_STATE_EVENT_NAME, handleProviderState as EventListener);
     };
   }, []);
 

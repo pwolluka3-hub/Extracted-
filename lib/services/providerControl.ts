@@ -3,6 +3,7 @@ import { kvDelete, kvGet, kvSet } from './puterService';
 
 export const DISABLE_PUTER_FALLBACK_KEY = 'disable_puter_fallback';
 export const PROVIDER_EVENT_NAME = 'nexus:provider-event';
+export const PROVIDER_STATE_EVENT_NAME = 'nexus:provider-state';
 
 export type ProviderEventDetail =
   | {
@@ -25,6 +26,10 @@ export type ProviderEventDetail =
       message: string;
     };
 
+export interface ProviderStateDetail {
+  disablePuterFallback: boolean;
+}
+
 const providerEventCooldown = new Map<string, number>();
 const PROVIDER_EVENT_COOLDOWN_MS = 45000;
 
@@ -34,10 +39,15 @@ export async function isPuterFallbackDisabled(): Promise<boolean> {
 }
 
 export async function setPuterFallbackDisabled(disabled: boolean): Promise<boolean> {
-  if (disabled) {
-    return kvSet(DISABLE_PUTER_FALLBACK_KEY, 'true');
+  const success = disabled
+    ? await kvSet(DISABLE_PUTER_FALLBACK_KEY, 'true')
+    : await kvDelete(DISABLE_PUTER_FALLBACK_KEY);
+
+  if (success) {
+    dispatchProviderState({ disablePuterFallback: disabled });
   }
-  return kvDelete(DISABLE_PUTER_FALLBACK_KEY);
+
+  return success;
 }
 
 export function resolveProviderForModel(model: string, models: AIModel[]): string {
@@ -56,4 +66,9 @@ export function dispatchProviderEvent(detail: ProviderEventDetail): void {
 
   providerEventCooldown.set(key, now);
   window.dispatchEvent(new CustomEvent<ProviderEventDetail>(PROVIDER_EVENT_NAME, { detail }));
+}
+
+export function dispatchProviderState(detail: ProviderStateDetail): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent<ProviderStateDetail>(PROVIDER_STATE_EVENT_NAME, { detail }));
 }

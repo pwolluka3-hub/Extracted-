@@ -765,15 +765,6 @@ export async function universalChat(
     disablePuterFallback,
   });
 
-  if (disablePuterFallback && preferredProvider !== 'puter' && configuredProviders.includes('puter')) {
-    dispatchProviderEvent({
-      type: 'puter_fallback_disabled',
-      provider: preferredProvider,
-      model,
-      message: `Puter fallback is disabled while ${preferredProvider} is your active chat provider.`,
-    });
-  }
-
   const candidateModels = Array.from(new Set(
     fallbackProviders.flatMap((provider) => {
       if (provider === preferredProvider) {

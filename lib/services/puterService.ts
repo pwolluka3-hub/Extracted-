@@ -13,6 +13,7 @@ const SENSITIVE_KV_KEY_PATTERN = /(?:^|[-_])(key|api[-_]?key|access[-_]?token|re
 const SAFE_LOCAL_KV_KEYS = new Set([
   'ai_model',
   'default_model',
+  'disable_puter_fallback',
   'image_provider',
   'video_provider',
   'onboarding_complete',

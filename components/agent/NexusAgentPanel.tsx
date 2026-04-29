@@ -13,7 +13,12 @@ import type { AttachedFile, ChatMessage } from '@/lib/types';
 import { downloadContent } from '@/lib/services/voiceConversation';
 import { voiceConversation } from '@/lib/services/voiceConversation';
 import { PATHS } from '@/lib/services/puterService';
-import { isPuterFallbackDisabled, resolveProviderForModel } from '@/lib/services/providerControl';
+import {
+  isPuterFallbackDisabled,
+  PROVIDER_STATE_EVENT_NAME,
+  resolveProviderForModel,
+  type ProviderStateDetail,
+} from '@/lib/services/providerControl';
 
 // Message component with download option
 function AgentMessage({ 
@@ -319,8 +324,18 @@ export function NexusAgentPanel() {
 
     void loadFallbackPreference();
 
+    const handleProviderState = (event: Event) => {
+      const customEvent = event as CustomEvent<ProviderStateDetail>;
+      if (mounted) {
+        setDisablePuterFallback(!!customEvent.detail?.disablePuterFallback);
+      }
+    };
+
+    window.addEventListener(PROVIDER_STATE_EVENT_NAME, handleProviderState as EventListener);
+
     return () => {
       mounted = false;
+      window.removeEventListener(PROVIDER_STATE_EVENT_NAME, handleProviderState as EventListener);
     };
   }, [currentModel]);
 

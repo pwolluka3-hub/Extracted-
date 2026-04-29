@@ -22,6 +22,7 @@ test('isSensitiveKvKey leaves normal preference keys non-sensitive', () => {
 
 test('canMirrorKvToLocalStorage allows known-safe preference keys', () => {
   assert.equal(canMirrorKvToLocalStorage('ai_model'), true);
+  assert.equal(canMirrorKvToLocalStorage('disable_puter_fallback'), true);
   assert.equal(canMirrorKvToLocalStorage('image_provider'), true);
   assert.equal(canMirrorKvToLocalStorage('provider_status_openrouter'), true);
 });
