@@ -978,8 +978,10 @@ export async function universalChat(
           ? PROVIDER_DEFAULT_MODELS[replacementProvider]?.[0]
           : null;
         const canSwitchFromPuter = preferredProvider === 'puter' && !!replacementModel;
+        const shouldDisableFallback = !disablePuterFallback && (preferredProvider !== 'puter' || canSwitchFromPuter);
+        const shouldNotifyPuterCredit = preferredProvider === 'puter' || !disablePuterFallback;
 
-        if (!disablePuterFallback && (preferredProvider !== 'puter' || canSwitchFromPuter)) {
+        if (shouldDisableFallback) {
           await setPuterFallbackDisabled(true);
         }
 
@@ -987,16 +989,18 @@ export async function universalChat(
           await setActiveChatModel(replacementModel);
         }
 
-        dispatchProviderEvent({
-          type: 'puter_credit_exhausted',
-          provider: 'puter',
-          model: candidateModel,
-          message: canSwitchFromPuter
-            ? `Puter hit a credits or quota limit. Chat is switching to ${replacementProvider} and Puter fallback has been disabled.`
-            : preferredProvider === 'puter'
-            ? 'Puter hit a credits or quota limit and no alternate chat provider is configured. Add another provider to keep chat available when Puter is out of credits.'
-            : 'Puter hit a credits or quota limit. Puter fallback has been disabled so chat can stay on your selected provider.',
-        });
+        if (shouldNotifyPuterCredit) {
+          dispatchProviderEvent({
+            type: 'puter_credit_exhausted',
+            provider: 'puter',
+            model: candidateModel,
+            message: canSwitchFromPuter
+              ? `Puter hit a credits or quota limit. Chat is switching to ${replacementProvider} and Puter fallback has been disabled.`
+              : preferredProvider === 'puter'
+              ? 'Puter hit a credits or quota limit and no alternate chat provider is configured. Add another provider to keep chat available when Puter is out of credits.'
+              : 'Puter hit a credits or quota limit. Puter fallback has been disabled so chat can stay on your selected provider.',
+          });
+        }
       }
       if (isConfigurationError(errorMessage)) {
         console.warn(`universalChat skipped ${candidateModel}: ${errorMessage}`);

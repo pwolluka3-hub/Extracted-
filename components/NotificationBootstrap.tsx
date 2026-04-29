@@ -14,6 +14,7 @@ import {
 export function NotificationBootstrap() {
   useEffect(() => {
     let mounted = true;
+    let lastPuterCreditToastAt = 0;
 
     const enableNotifications = async () => {
       const settings = await loadSettings();
@@ -51,6 +52,11 @@ export function NotificationBootstrap() {
       }
 
       if (detail.type === 'puter_credit_exhausted') {
+        const now = Date.now();
+        if (now - lastPuterCreditToastAt < 10 * 60 * 1000) {
+          return;
+        }
+        lastPuterCreditToastAt = now;
         toast({
           title: 'Puter credits exhausted',
           description: detail.message,

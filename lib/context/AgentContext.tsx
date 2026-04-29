@@ -54,7 +54,13 @@ import {
 import { syncPostedEngagements } from '@/lib/services/engagementSyncService';
 import { normalizeIncomingMessage, detectExplicitMediaIntent, buildFallbackChatMessages } from './agentBehavior.mjs';
 import { ensureAgentSkillsInstalled, getEnabledAgentSkills, buildAgentSkillContext } from '@/lib/services/agentSkillService';
-import { CHAT_MODEL_EVENT_NAME, setActiveChatModel, type ChatModelDetail } from '@/lib/services/providerControl';
+import {
+  CHAT_MODEL_EVENT_NAME,
+  setActiveChatModel,
+  setPuterFallbackDisabled,
+  resolveProviderForModel,
+  type ChatModelDetail,
+} from '@/lib/services/providerControl';
 import { draftsService } from '@/lib/services/draftsService';
 import { enqueuePostJob, loadQueuedPostJobs, removeQueuedPostJob } from '@/lib/services/postQueueService';
 import { getNextBestTime } from '@/lib/services/bestTimeService';
@@ -93,6 +99,7 @@ const PLANNING_VISIBILITY_PATTERN = /\b(what(?:'s| is)?\s+(?:it\s+)?planning|sho
 const DELETE_ACTION_PATTERN = /\b(delete|remove|cancel|unschedule)\b[\s\S]{0,24}\b(it|this|that|latest|last|schedule|scheduled|queue|queued|plan)\b/i;
 const BULK_SCHEDULE_PATTERN = /\bbulk\s+(schedule|scheduling|posting|post)\b/i;
 const BULK_SCHEDULE_EXECUTION_PATTERN = /\b(run|start|execute|do|import|queue|schedule)\b[\s\S]{0,30}\bbulk\s+(schedule|scheduling|posting|post)\b/i;
+const MEMORY_RECALL_PATTERN = /\b(what do you remember|what do you know about our brand|what do you know about my brand|what do you remember about our brand|what do you remember about my brand|what do you remember about our niche|what do you remember about my niche|recall our brand|remember our brand)\b/i;
 const UNIVERSAL_SCENE_DIRECTIVE = [
   'Scene generation constraints:',
   '- Keep mystery over explanation; never explain rituals, lore, or magic systems.',
@@ -409,6 +416,39 @@ function wantsBulkSchedule(message: string): boolean {
 
 function wantsBulkScheduleExecution(message: string): boolean {
   return BULK_SCHEDULE_EXECUTION_PATTERN.test(message.trim().toLowerCase());
+}
+
+function wantsMemoryRecall(message: string): boolean {
+  return MEMORY_RECALL_PATTERN.test(message.trim().toLowerCase());
+}
+
+function buildMemoryRecallReply(
+  memory: Awaited<ReturnType<typeof loadAgentMemory>>,
+  brandKit: Awaited<ReturnType<typeof loadBrandKit>>
+): string {
+  const lockedNiche = memory.niche || brandKit?.niche || 'not set';
+  const lockedAudience = memory.targetAudience || brandKit?.targetAudience || 'not set';
+  const lockedTone = memory.preferredTone || brandKit?.tone || 'not set';
+  const lockedPlatforms = memory.targetPlatforms.length > 0 ? memory.targetPlatforms.join(', ') : 'not set';
+  const brandName = memory.userFacts.find((fact) => fact.key === 'brand_name')?.value || brandKit?.brandName || 'not set';
+  const topIdeas = memory.contentIdeas
+    .filter((idea) => idea.status === 'new')
+    .slice(-3)
+    .map((idea) => idea.idea);
+  const topDetails = memory.nicheDetails.slice(-3);
+
+  return [
+    'Here is what I currently have locked:',
+    `- Brand: ${brandName}`,
+    `- Niche: ${lockedNiche}`,
+    `- Target audience: ${lockedAudience}`,
+    `- Tone: ${lockedTone}`,
+    `- Platforms: ${lockedPlatforms}`,
+    `- Key details: ${topDetails.length > 0 ? topDetails.join(' | ') : 'none saved yet'}`,
+    `- Saved ideas: ${topIdeas.length > 0 ? topIdeas.join(' | ') : 'none saved yet'}`,
+    '',
+    'If any of this is wrong, send the correction and I will overwrite it immediately.',
+  ].join('\n');
 }
 
 function buildCapabilitiesReply(options: {
@@ -802,7 +842,12 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   // Model switching
   const setModel = useCallback((model: string) => {
     setState(s => ({ ...s, currentModel: model }));
-    void setActiveChatModel(model);
+    const selectedProvider = resolveProviderForModel(model, AVAILABLE_MODELS);
+    const shouldDisablePuterFallback = selectedProvider !== 'puter';
+    void (async () => {
+      await setActiveChatModel(model);
+      await setPuterFallbackDisabled(shouldDisablePuterFallback);
+    })();
   }, []);
 
   const setImageProvider = useCallback((provider: ImageProvider) => {
@@ -1035,6 +1080,12 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const resolveExecutionModel = useCallback(async (
     task: 'chat' | 'vision' | 'code' | 'creative' | 'analysis' | 'fast'
   ): Promise<string> => {
+    const currentProvider = resolveProviderForModel(state.currentModel, AVAILABLE_MODELS);
+    if (currentProvider !== 'puter') {
+      // Respect explicit non-Puter model selection instead of silently drifting back to Puter.
+      return state.currentModel;
+    }
+
     try {
       const capabilities = await getProviderCapabilitiesCached();
       let recommended = getRecommendedModel(task, capabilities);
@@ -1705,6 +1756,15 @@ Rules:
             multiAgentEnabled: state.multiAgentEnabled,
           })
         );
+        return;
+      }
+
+      if (attachedFiles.length === 0 && wantsMemoryRecall(normalizedContent)) {
+        const [memory, brandKit] = await Promise.all([
+          loadAgentMemory(),
+          loadBrandKit(),
+        ]);
+        await postCommandResponse(buildMemoryRecallReply(memory, brandKit));
         return;
       }
 

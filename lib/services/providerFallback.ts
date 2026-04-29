@@ -27,8 +27,11 @@ export function buildFallbackProviders(
     return Array.from(new Set(orderedProviders));
   }
 
+  // When a non-Puter provider is selected, keep fallback within non-Puter providers.
+  // This prevents hidden fallback attempts from re-triggering Puter credit errors.
   if (!disablePuterFallback) {
-    return Array.from(new Set(orderedProviders));
+    const nonPuterProviders = orderedProviders.filter((provider) => provider !== 'puter');
+    return Array.from(new Set(nonPuterProviders.length > 0 ? nonPuterProviders : [preferredProvider]));
   }
 
   const nonPuterProviders = orderedProviders.filter((provider) => provider !== 'puter');
