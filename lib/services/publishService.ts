@@ -219,6 +219,13 @@ export async function publishPost(params: {
     });
     return publishResult;
   } catch (error) {
+    // SECURITY FIX: Safely extract error message without type assertion
+    const errorMessage = error instanceof Error 
+      ? error.message 
+      : typeof error === 'string'
+      ? error
+      : 'Unknown error occurred';
+
     await logPostingEvent({
       source,
       generationId,
@@ -226,11 +233,11 @@ export async function publishPost(params: {
       platforms,
       status: 'failed',
       textPreview: text,
-      error: (error as Error).message,
+      error: errorMessage,
     });
     return {
       success: false,
-      errors: { general: (error as Error).message },
+      errors: { general: errorMessage },
     };
   }
 }

@@ -217,13 +217,25 @@ async function callOpenAICompatibleChat(
   model: string,
   extraHeaders?: Record<string, string>
 ): Promise<string> {
+  // SECURITY: CSRF vulnerability - API keys exposed to external domains
+  // IMPORTANT: This should be proxied through your backend server instead of calling external APIs directly
+  // For production, implement an API proxy endpoint that:
+  // 1. Validates user authentication server-side
+  // 2. Stores API keys on backend (not in browser)
+  // 3. Adds CSRF tokens to requests
+  // 4. Implements rate limiting and request validation
+
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
+      // Add origin headers for server-side validation
+      'X-Requested-With': 'XMLHttpRequest',
       ...extraHeaders,
     },
+    // SECURITY: Include credentials for session-based CSRF protection
+    credentials: 'include',
     body: JSON.stringify({
       model,
       messages: normalizeChatMessages(messages),

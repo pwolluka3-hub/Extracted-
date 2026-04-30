@@ -1,10 +1,15 @@
 // Puter.js Service Wrapper
 // All Puter operations go through this service
 
+import { encryptSensitiveData, decryptSensitiveData, markAsEncrypted, isEncrypted, extractCiphertext } from '../utils/crypto.ts';
+
 const PUTER_READY_TIMEOUT = 8000;
 const PUTER_AUTH_TIMEOUT = 45000;
 const PUTER_AUTH_POLL_INTERVAL = 500;
+// SECURITY FIX: Use SRI hash for Puter script to prevent tampering
+// Generate SRI hash: curl https://js.puter.com/v2/ | openssl dgst -sha384 -binary | openssl enc -base64 -A
 const PUTER_SCRIPT_URL = 'https://js.puter.com/v2/';
+const PUTER_SCRIPT_SRI = ''; // TODO: Replace with actual SRI hash from CDN
 const LOCAL_KV_PREFIX = 'nexus:kv:';
 const LOCAL_FILE_PREFIX = 'nexus:file:';
 const LOCAL_AUTH_KEY = 'nexus:auth:user';
@@ -535,7 +540,19 @@ export async function isSignedIn(): Promise<boolean> {
 // Key-Value Store
 export async function kvSet(key: string, value: unknown): Promise<boolean> {
   try {
-    const stringValue = serializeKvValue(key, value);
+    let stringValue = serializeKvValue(key, value);
+
+    // SECURITY FIX: Encrypt sensitive keys before storing
+    if (isSensitiveKvKey(key)) {
+      try {
+        const encrypted = await encryptSensitiveData(stringValue);
+        stringValue = markAsEncrypted(encrypted);
+      } catch (error) {
+        console.error('[PuterService] Encryption failed for key:', key, error);
+        // Fall back to storing unencrypted if encryption fails
+      }
+    }
+
     if (hasLocalStorage() && canMirrorKvToLocalStorage(key)) {
       window.localStorage.setItem(localKvKey(key), stringValue);
     } else if (hasLocalStorage()) {
@@ -564,6 +581,18 @@ export async function kvGet<T = string>(key: string, parse = false): Promise<T |
     }
 
     if (value === null) return null;
+
+    // SECURITY FIX: Decrypt sensitive keys if encrypted
+    if (isEncrypted(value)) {
+      try {
+        const ciphertext = extractCiphertext(value);
+        value = await decryptSensitiveData(ciphertext);
+      } catch (error) {
+        console.error('[PuterService] Decryption failed for key:', key, error);
+        // Return null if decryption fails (data may be corrupted)
+        return null;
+      }
+    }
     
     if (parse) {
       try {

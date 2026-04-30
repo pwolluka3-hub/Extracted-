@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/context/AuthContext';
 import { getPuterAuthDiagnostics, waitForPuter, type PuterAuthDiagnostics } from '@/lib/services/puterService';
+import { sanitizeRedirectUrl } from '@/lib/utils';
 import { GlassCard } from '@/components/nexus/GlassCard';
 
 function LandingContent() {
@@ -27,7 +28,9 @@ function LandingContent() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
-    setNextPath(params.get('next'));
+    // SECURITY FIX: Validate redirect URL to prevent open redirect attacks
+    const next = params.get('next');
+    setNextPath(next);
     setNeedsManualReauth(params.get('reauth') === '1');
   }, []);
 
@@ -53,24 +56,22 @@ function LandingContent() {
   useEffect(() => {
     if (isGuest && !hasRedirected) {
       setHasRedirected(true);
-      router.push(nextPath || (onboardingComplete ? '/dashboard' : '/onboarding'));
+      // SECURITY FIX: Sanitize redirect URL before navigation
+      const safeUrl = sanitizeRedirectUrl(nextPath, onboardingComplete ? '/dashboard' : '/onboarding');
+      router.push(safeUrl);
       return;
     }
 
     if (isAuthenticated && user && !hasRedirected) {
       setHasRedirected(true);
       try {
-        if (nextPath) {
-          router.push(nextPath);
-        } else if (onboardingComplete) {
-          router.push('/dashboard');
-        } else {
-          router.push('/onboarding');
-        }
+        // SECURITY FIX: Validate nextPath before redirect
+        const safeUrl = sanitizeRedirectUrl(nextPath, onboardingComplete ? '/dashboard' : '/onboarding');
+        router.push(safeUrl);
       } catch (error) {
         console.error('[LandingPage] Navigation error:', error);
-        // Fallback to onboarding on error
-        router.push('/onboarding');
+        // Fallback to dashboard on error
+        router.push('/dashboard');
       }
     }
   }, [isAuthenticated, isGuest, user, onboardingComplete, hasRedirected, nextPath, router]);

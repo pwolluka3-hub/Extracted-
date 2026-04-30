@@ -7,10 +7,20 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const nextConfig = {
   outputFileTracingRoot: __dirname,
   images: {
+    // SECURITY FIX: Restrict to trusted domains only instead of allowing any HTTPS domain
     remotePatterns: [
       {
         protocol: 'https',
-        hostname: '**',
+        hostname: 'puter.com',
+      },
+      {
+        protocol: 'https',
+        hostname: '*.puter.com',
+      },
+      // Add other trusted CDNs as needed
+      {
+        protocol: 'https',
+        hostname: 'cdn.example.com', // Replace with your CDN domain
       },
     ],
   },

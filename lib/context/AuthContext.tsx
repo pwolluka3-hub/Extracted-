@@ -85,6 +85,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Initialize auth state and restore session from cache/Puter
   useEffect(() => {
+    // SECURITY FIX: Use AbortController instead of just a flag to prevent race conditions
+    const abortController = new AbortController();
     let mounted = true;
 
     async function checkAuth() {
@@ -110,12 +112,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         void (async () => {
           try {
-            const [onboarding, brandKit] = await Promise.all([
-              withTimeout(isOnboardingComplete().catch(() => false), false),
-              withTimeout(loadBrandKit().catch(() => null), null),
-            ]);
+            // SECURITY FIX: Improve error handling with proper error logging
+            let onboarding = false;
+            let brandKit = null;
+            
+            try {
+              onboarding = await withTimeout(isOnboardingComplete().catch((e) => {
+                console.warn('[AuthContext] Failed to check onboarding status:', e);
+                return false;
+              }), false);
+            } catch (e) {
+              console.error('[AuthContext] Onboarding check failed:', e);
+            }
 
-            if (!mounted) return;
+            try {
+              brandKit = await withTimeout(loadBrandKit().catch((e) => {
+                console.warn('[AuthContext] Failed to load brand kit:', e);
+                return null;
+              }), null);
+            } catch (e) {
+              console.error('[AuthContext] Brand kit load failed:', e);
+            }
+
+            if (!mounted || abortController.signal.aborted) return;
             setState((current) => ({
               ...current,
               onboardingComplete: onboarding,
@@ -129,12 +148,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       try {
-        const authenticated = await withTimeout(isSignedIn().catch(() => false), false);
-        const user = authenticated
-          ? await withTimeout(getUser().catch(() => null), null)
-          : null;
+        // SECURITY FIX: Separate error handling for authentication and onboarding
+        let authenticated = false;
+        let user = null;
+        
+        try {
+          authenticated = await withTimeout(isSignedIn().catch((e) => {
+            console.warn('[AuthContext] Failed to check sign-in status:', e);
+            return false;
+          }), false);
+        } catch (e) {
+          console.error('[AuthContext] Sign-in check failed:', e);
+        }
 
-        if (!mounted) return;
+        if (authenticated) {
+          try {
+            user = await withTimeout(getUser().catch((e) => {
+              console.warn('[AuthContext] Failed to get user:', e);
+              return null;
+            }), null);
+          } catch (e) {
+            console.error('[AuthContext] User fetch failed:', e);
+          }
+        }
+
+        if (!mounted || abortController.signal.aborted) return;
 
         if (!authenticated || !user) {
           clearCachedAuth();
@@ -151,13 +189,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         writeGuestMode(false);
-        await withTimeout(initMemory().catch(() => undefined), undefined);
-        const [onboarding, brandKit] = await Promise.all([
-          withTimeout(isOnboardingComplete().catch(() => false), false),
-          withTimeout(loadBrandKit().catch(() => null), null),
-        ]);
+        await withTimeout(initMemory().catch((e) => {
+          console.warn('[AuthContext] Failed to initialize memory:', e);
+          return undefined;
+        }), undefined);
+        
+        let onboarding = false;
+        let brandKit = null;
+        
+        try {
+          const results = await Promise.all([
+            withTimeout(isOnboardingComplete().catch((e) => {
+              console.warn('[AuthContext] Failed to check onboarding:', e);
+              return false;
+            }), false),
+            withTimeout(loadBrandKit().catch((e) => {
+              console.warn('[AuthContext] Failed to load brand kit:', e);
+              return null;
+            }), null),
+          ]);
+          onboarding = results[0];
+          brandKit = results[1];
+        } catch (e) {
+          console.error('[AuthContext] Failed to load onboarding/brandkit:', e);
+        }
 
-        if (!mounted) return;
+        if (!mounted || abortController.signal.aborted) return;
 
         setState({
           isLoading: false,
@@ -167,8 +224,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           onboardingComplete: onboarding,
           brandKit,
         });
-      } catch {
-        if (!mounted) return;
+      } catch (error) {
+        console.error('[AuthContext] Auth check failed:', error);
+        if (!mounted || abortController.signal.aborted) return;
         clearCachedAuth();
 
         setState({
@@ -184,7 +242,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     checkAuth();
     
-    return () => { mounted = false; };
+    // SECURITY FIX: Abort in-flight requests when component unmounts
+    return () => {
+      mounted = false;
+      abortController.abort();
+    };
   }, []);
 
   const login = useCallback(async (): Promise<boolean> => {

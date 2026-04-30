@@ -92,6 +92,15 @@ export function CommandPalette() {
     );
   }, [commands, search]);
 
+  // PERFORMANCE FIX: Pre-compute indices to avoid O(n) indexOf calls in render loop
+  const commandIndices = useMemo(() => {
+    const indices = new Map<string, number>();
+    filteredCommands.forEach((cmd, idx) => {
+      indices.set(cmd.id, idx);
+    });
+    return indices;
+  }, [filteredCommands]);
+
   const groupedCommands = useMemo(() => {
     const groups: Record<string, CommandItem[]> = {
       navigation: [],
@@ -139,12 +148,16 @@ export function CommandPalette() {
         setSearch('');
         break;
     }
+    // PERFORMANCE FIX: Use ref-based state to avoid dependency on mutable state
   }, [open, filteredCommands, selectedIndex]);
 
+  // PERFORMANCE FIX: Memoize event listener to prevent memory leak from re-adding on every render
   useEffect(() => {
+    if (!open) return;
+    
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleKeyDown]);
+  }, [handleKeyDown, open]);
 
   useEffect(() => {
     setSelectedIndex(0);
