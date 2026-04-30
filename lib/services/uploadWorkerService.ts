@@ -6,12 +6,21 @@ import { trackGenerationPosted, trackGenerationPostFailure } from './generationT
 import { recordWorkerCompletion, recordWorkerStart } from './workerHeartbeatService';
 
 const MAX_UPLOAD_ATTEMPTS = 3;
+const TERMINAL_UPLOAD_ERROR_PATTERNS = [
+  /Ayrshare API key not configured/i,
+  /Workflow blocked:/i,
+];
 
 export interface UploadWorkerReport {
   processed: number;
   posted: number;
   failed: number;
   errors: Array<{ jobId: string; error: string }>;
+}
+
+function isTerminalUploadError(error: string | undefined): boolean {
+  if (!error) return false;
+  return TERMINAL_UPLOAD_ERROR_PATTERNS.some((pattern) => pattern.test(error));
 }
 
 async function processJob(
@@ -87,9 +96,10 @@ export async function runUploadWorker(limit = 5): Promise<UploadWorkerReport> {
 
       report.failed++;
       report.errors.push({ jobId: job.id, error: result.error || 'Unknown error' });
+      const terminal = isTerminalUploadError(result.error);
       await updateQueuedPostJob(job.id, {
         status: 'failed',
-        attempts: job.attempts + 1,
+        attempts: terminal ? MAX_UPLOAD_ATTEMPTS : job.attempts + 1,
         lastError: result.error,
       });
       if (job.generationId) {

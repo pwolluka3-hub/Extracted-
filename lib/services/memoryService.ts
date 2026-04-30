@@ -98,23 +98,36 @@ export async function listDrafts(): Promise<ContentDraft[]> {
 // Published Content
 export async function savePublishedContent(draft: ContentDraft): Promise<boolean> {
   const path = `${PATHS.published}/${draft.id}.json`;
-  return writeFile(path, draft);
+  const [localSaved, cloudSaved] = await Promise.all([
+    writeFile(path, draft),
+    saveCloudDraft(draft).catch(() => false),
+  ]);
+  return localSaved || cloudSaved;
 }
 
 export async function listPublishedContent(): Promise<ContentDraft[]> {
+  const cloudDrafts = await listCloudDrafts().catch(() => []);
   const files = await listFiles(PATHS.published);
-  const published: ContentDraft[] = [];
+  const publishedById = new Map<string, ContentDraft>();
   
   for (const file of files) {
     if (file.name.endsWith('.json') && !file.is_dir) {
       const content = await readFile<ContentDraft>(`${PATHS.published}/${file.name}`, true);
       if (content) {
-        published.push(content);
+        publishedById.set(content.id, content);
       }
     }
   }
+
+  for (const draft of cloudDrafts) {
+    if (draft.status !== 'published') continue;
+    if (!publishedById.has(draft.id)) {
+      publishedById.set(draft.id, draft);
+      await writeFile(`${PATHS.published}/${draft.id}.json`, draft);
+    }
+  }
   
-  return published.sort((a, b) => 
+  return Array.from(publishedById.values()).sort((a, b) => 
     new Date(b.publishedAt || b.updated).getTime() - new Date(a.publishedAt || a.updated).getTime()
   );
 }

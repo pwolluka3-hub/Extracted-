@@ -2431,13 +2431,14 @@ Rules:
             warnings: pipeline.warnings,
             assets: {
               image: Boolean(pipeline.media.imageUrl),
-              video: Boolean(pipeline.media.videoUrl),
+              video: Boolean(pipeline.media.finalVideoUrl || pipeline.media.videoUrl),
               voice: Boolean(pipeline.audio.voiceUrl),
               music: Boolean(pipeline.audio.musicUrl),
             },
           });
 
           const assets = [
+            pipeline.media.finalVideoUrl ? `Final video: ${pipeline.media.finalVideoUrl}` : null,
             pipeline.media.imageUrl ? `Image: ${pipeline.media.imageUrl}` : null,
             pipeline.media.videoUrl ? `Video: ${pipeline.media.videoUrl}` : null,
             pipeline.audio.voiceUrl ? `Voice: ${pipeline.audio.voiceUrl}` : null,

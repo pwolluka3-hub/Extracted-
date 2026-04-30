@@ -3,7 +3,7 @@
 import type { Platform } from '@/lib/types';
 import { generateContent } from './contentEngine';
 import { generateAgentImage, generateAgentVideo } from './agentMediaService';
-import { generateBackgroundMusic } from './musicEngine';
+import { generateBackgroundMusic, getBrowserMusicGenerator } from './musicEngine';
 import { generateVoice } from './voiceGenerationService';
 import { analyzeNiche, type BrandProfile } from './nicheAnalyzerService';
 import { persistBrandProfile, saveCharacterLock } from './brandMemoryAgentService';
@@ -25,6 +25,9 @@ import { optimizeForPlatforms } from './platformOptimizerService';
 import { runQualityControl } from './qualityControlAgentService';
 import { resolveGenerationRoute } from './generationControllerService';
 import { enqueuePostJob } from './postQueueService';
+import { assembleFinalMedia } from './finalMediaAssemblyService';
+import { persistBlobMediaAsset, persistMediaReference } from './mediaAssetPersistenceService';
+import { isEphemeralMediaReference, shouldAssembleFinalMedia } from './mediaAssetPrimitives.mjs';
 
 const DEFAULT_PLATFORMS: Platform[] = ['instagram', 'tiktok', 'youtube'];
 
@@ -67,6 +70,7 @@ export interface UniversalPipelineResult {
   media: {
     imageUrl?: string;
     videoUrl?: string;
+    finalVideoUrl?: string;
   };
   criticVerdict: {
     approved: boolean;
@@ -145,6 +149,39 @@ function ensureHookLead(text: string, hook: string): string {
   }
 
   return `${trimmedHook}\n\n${trimmedText}`;
+}
+
+async function normalizeMediaAssetUrl(
+  rawUrl: string | undefined,
+  options: {
+    kind: 'image' | 'video' | 'audio';
+    generationId?: string;
+    mimeTypeHint?: string;
+    label: string;
+    warnings: string[];
+  }
+): Promise<string | undefined> {
+  if (!rawUrl) return undefined;
+
+  try {
+    const persisted = await persistMediaReference(rawUrl, {
+      kind: options.kind,
+      generationId: options.generationId,
+      mimeTypeHint: options.mimeTypeHint,
+    });
+
+    if (persisted?.url) {
+      return persisted.url;
+    }
+
+    options.warnings.push(`${options.label} asset could not be persisted as a durable file.`);
+  } catch (error) {
+    options.warnings.push(
+      `${options.label} asset persistence failed: ${error instanceof Error ? error.message : 'Unknown persistence error'}`
+    );
+  }
+
+  return rawUrl;
 }
 
 export async function runUniversalContentPipeline(
@@ -228,6 +265,7 @@ export async function runUniversalContentPipeline(
   const route = await resolveGenerationRoute();
   let imageUrl: string | undefined;
   let videoUrl: string | undefined;
+  let finalVideoUrl: string | undefined;
 
   if (request.includeImage !== false && visualPromptSource.imagePrompts[0]) {
     try {
@@ -235,7 +273,12 @@ export async function runUniversalContentPipeline(
         preferredModel: route.textModel,
         provider: route.imageProvider,
       });
-      imageUrl = imageResult.media[0]?.url;
+      imageUrl = await normalizeMediaAssetUrl(imageResult.media[0]?.url, {
+        kind: 'image',
+        generationId: request.generationId,
+        label: 'Image',
+        warnings,
+      });
       if (!imageUrl) {
         warnings.push('Image generation returned no asset URL.');
       }
@@ -250,7 +293,12 @@ export async function runUniversalContentPipeline(
         preferredModel: route.textModel,
         provider: route.videoProvider,
       });
-      videoUrl = videoResult.media[0]?.url;
+      videoUrl = await normalizeMediaAssetUrl(videoResult.media[0]?.url, {
+        kind: 'video',
+        generationId: request.generationId,
+        label: 'Video',
+        warnings,
+      });
       if (!videoUrl) {
         warnings.push('Video generation returned no asset URL.');
       }
@@ -264,11 +312,23 @@ export async function runUniversalContentPipeline(
     try {
       const voice = await generateVoice({
         text: finalScript,
-        provider: 'web-speech',
         speed: emotion.pacing === 'slow' ? 0.88 : emotion.pacing === 'fast' ? 1.08 : 1,
       });
-      voiceUrl = typeof voice === 'string' ? voice : undefined;
-    } catch {
+      voiceUrl = await normalizeMediaAssetUrl(typeof voice === 'string' ? voice : undefined, {
+        kind: 'audio',
+        generationId: request.generationId,
+        mimeTypeHint: 'audio/mpeg',
+        label: 'Voice',
+        warnings,
+      });
+      if (voiceUrl && isEphemeralMediaReference(voiceUrl)) {
+        warnings.push('Voice generation is playback-only in the current provider path. Configure a hosted TTS provider for durable voice assets.');
+      }
+      if (!voiceUrl) {
+        warnings.push('Voice generation returned no reusable audio asset.');
+      }
+    } catch (error) {
+      warnings.push(`Voice generation failed: ${error instanceof Error ? error.message : 'Unknown voice error'}`);
       voiceUrl = undefined;
     }
   }
@@ -277,12 +337,56 @@ export async function runUniversalContentPipeline(
   if (request.includeMusic !== false) {
     try {
       const music = await generateBackgroundMusic(finalScript, { duration: beatPlan.durationSeconds });
-      musicUrl = music?.url;
+      if (music?.url === 'browser-generated') {
+        try {
+          const blob = await getBrowserMusicGenerator().generateMusic(music.mood, music.duration || beatPlan.durationSeconds);
+          const persisted = await persistBlobMediaAsset(blob, {
+            kind: 'audio',
+            generationId: request.generationId,
+            fileExtension: 'webm',
+          });
+          musicUrl = persisted?.url;
+          if (!musicUrl) {
+            warnings.push('Browser-generated music could not be persisted as a durable asset.');
+          }
+        } catch (error) {
+          warnings.push(`Browser music persistence failed: ${error instanceof Error ? error.message : 'Unknown browser music error'}`);
+        }
+      } else {
+        musicUrl = await normalizeMediaAssetUrl(music?.url, {
+          kind: 'audio',
+          generationId: request.generationId,
+          mimeTypeHint: 'audio/mpeg',
+          label: 'Music',
+          warnings,
+        });
+      }
       if (!musicUrl) {
         warnings.push('Music generation returned no asset URL.');
       }
     } catch (error) {
       warnings.push(`Music generation failed: ${error instanceof Error ? error.message : 'Unknown music error'}`);
+    }
+  }
+
+  if (shouldAssembleFinalMedia({ imageUrl, videoUrl, voiceUrl, musicUrl })) {
+    const assembly = await assembleFinalMedia({
+      imageUrl,
+      videoUrl,
+      voiceUrl,
+      musicUrl,
+      mixPlan,
+      durationSeconds: beatPlan.durationSeconds,
+      generationId: request.generationId,
+    });
+
+    if (assembly.asset?.url) {
+      finalVideoUrl = assembly.asset.url;
+    }
+
+    warnings.push(...assembly.warnings);
+    if (!finalVideoUrl && (voiceUrl || musicUrl)) {
+      warnings.push('Final media assembly did not produce a durable export.');
     }
   }
 
@@ -300,6 +404,13 @@ export async function runUniversalContentPipeline(
       voice: request.includeVoice !== false,
       music: request.includeMusic !== false,
     },
+    deliveredMedia: {
+      imageUrl,
+      videoUrl,
+      finalVideoUrl,
+      voiceUrl,
+      musicUrl,
+    },
   });
 
   const queueIds: string[] = [];
@@ -308,7 +419,7 @@ export async function runUniversalContentPipeline(
       const job = await enqueuePostJob({
         text: `${pkg.text}\n\n${pkg.hashtags.map((tag) => (tag.startsWith('#') ? tag : `#${tag}`)).join(' ')}`.trim(),
         platforms: [pkg.platform],
-        mediaUrl: videoUrl || imageUrl,
+        mediaUrl: finalVideoUrl || videoUrl || imageUrl,
         generationId: request.generationId,
         pipelineRunId,
         niche: brandProfile.niche,
@@ -328,7 +439,7 @@ export async function runUniversalContentPipeline(
       'Generate hook, script, story beats, and directed scenes',
       'Build cinematic image/video prompts and select fallback-ready generation routes',
       'Generate voice, music, sound-design timing, and a voice-forward mix plan when requested',
-      'Optimize final packages per platform and run quality control before delivery',
+      'Assemble a final export when visual and audio layers are available, then optimize per platform and run quality control',
     ],
     brandProfile,
     identity,
@@ -350,6 +461,7 @@ export async function runUniversalContentPipeline(
     media: {
       imageUrl,
       videoUrl,
+      finalVideoUrl,
     },
     criticVerdict: {
       approved: quality.approved && warnings.length === 0,

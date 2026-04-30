@@ -661,6 +661,7 @@ export async function initFileSystem(): Promise<void> {
     BASE_PATH,
     `${BASE_PATH}/brand`,
     `${BASE_PATH}/content`,
+    `${BASE_PATH}/content/assets`,
     `${BASE_PATH}/content/drafts`,
     `${BASE_PATH}/content/published`,
     `${BASE_PATH}/content/templates`,
@@ -720,6 +721,47 @@ export async function saveFile(path: string, content: unknown): Promise<boolean>
   return writeFile(path, content);
 }
 
+export async function writeBinaryFile(path: string, blob: Blob): Promise<boolean> {
+  const fullPath = path.startsWith('/') ? path : `${BASE_PATH}/${path}`;
+
+  try {
+    if (hasLocalStorage()) {
+      const reader = new FileReader();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        reader.onerror = () => reject(reader.error || new Error('Failed to serialize blob'));
+        reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+        reader.readAsDataURL(blob);
+      });
+      window.localStorage.setItem(localFileKey(fullPath), dataUrl);
+    }
+
+    if (!isPuterAvailable()) {
+      return hasLocalStorage();
+    }
+
+    const parentPath = fullPath.substring(0, fullPath.lastIndexOf('/'));
+    if (parentPath) {
+      await ensureDirectoryPath(parentPath);
+    }
+
+    await window.puter.fs.write(fullPath, blob, { createMissingParents: true });
+    return true;
+  } catch (error: unknown) {
+    const errorStr = String(error);
+    if (errorStr.includes('404') || errorStr.includes('not found') || errorStr.includes('subject_does_not_exist')) {
+      try {
+        await initFileSystem();
+        await window.puter.fs.write(fullPath, blob, { createMissingParents: true });
+        return true;
+      } catch {
+        return hasLocalStorage();
+      }
+    }
+    console.error('Puter fs.write(binary) error:', error);
+    return hasLocalStorage();
+  }
+}
+
 // Recursively ensure all directories in a path exist
 async function ensureDirectoryPath(path: string): Promise<void> {
   if (!isPuterAvailable() || !path || path === '/') return;
@@ -772,6 +814,64 @@ export async function readFile<T = string>(path: string, parse = false): Promise
       return null;
     }
     console.error('Puter fs.read error:', error);
+    return null;
+  }
+}
+
+export async function readBinaryFile(path: string): Promise<Blob | null> {
+  try {
+    const fullPath = path.startsWith('/') ? path : `${BASE_PATH}/${path}`;
+
+    if (isPuterAvailable()) {
+      const blob = await window.puter.fs.read(fullPath);
+      return blob;
+    }
+
+    if (hasLocalStorage()) {
+      const dataUrl = window.localStorage.getItem(localFileKey(fullPath));
+      if (!dataUrl) return null;
+      const response = await fetch(dataUrl);
+      return await response.blob();
+    }
+
+    return null;
+  } catch (error: unknown) {
+    const errorStr = String(error);
+    const errorObj = error as { code?: string };
+    if (
+      errorStr.includes('not found') ||
+      errorStr.includes('ENOENT') ||
+      errorStr.includes('subject_does_not_exist') ||
+      errorObj?.code === 'subject_does_not_exist'
+    ) {
+      return null;
+    }
+    console.error('Puter fs.read(binary) error:', error);
+    return null;
+  }
+}
+
+export async function getFileReadUrl(path: string): Promise<string | null> {
+  try {
+    const fullPath = path.startsWith('/') ? path : `${BASE_PATH}/${path}`;
+
+    if (isPuterAvailable()) {
+      const getReadURL = window.puter.fs.getReadURL;
+      if (typeof getReadURL === 'function') {
+        return await getReadURL(fullPath);
+      }
+
+      const blob = await window.puter.fs.read(fullPath);
+      return URL.createObjectURL(blob);
+    }
+
+    if (hasLocalStorage()) {
+      return window.localStorage.getItem(localFileKey(fullPath));
+    }
+
+    return null;
+  } catch (error) {
+    console.error('Puter fs.getReadURL error:', error);
     return null;
   }
 }
@@ -847,6 +947,7 @@ export const PATHS = {
   brandKit: `${BASE_PATH}/brand/brandkit.json`,
   voice: `${BASE_PATH}/brand/voice.json`,
   niche: `${BASE_PATH}/brand/niche.json`,
+  assets: `${BASE_PATH}/content/assets`,
   drafts: `${BASE_PATH}/content/drafts`,
   published: `${BASE_PATH}/content/published`,
   templates: `${BASE_PATH}/content/templates`,
@@ -873,7 +974,10 @@ export const puterService = {
   initFileSystem,
   writeFile,
   saveFile,
+  writeBinaryFile,
   readFile,
+  readBinaryFile,
+  getFileReadUrl,
   deleteFile,
   listFiles,
   fileExists,

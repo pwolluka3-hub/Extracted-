@@ -1,6 +1,7 @@
 'use client';
 
 import { validateContent } from './governorService';
+import { isEphemeralMediaReference } from './mediaAssetPrimitives.mjs';
 
 export interface QualityCheckInput {
   text: string;
@@ -24,6 +25,13 @@ export interface QualityCheckInput {
     video: boolean;
     voice: boolean;
     music: boolean;
+  };
+  deliveredMedia?: {
+    imageUrl?: string;
+    videoUrl?: string;
+    finalVideoUrl?: string;
+    voiceUrl?: string;
+    musicUrl?: string;
   };
 }
 
@@ -60,6 +68,24 @@ export async function runQualityControl(input: QualityCheckInput): Promise<Quali
 
   if (input.requestedModalities?.video && !input.visualPrompts?.videoPrompts?.length) {
     reasons.push('Video prompt package is missing');
+  }
+
+  if (input.requestedModalities?.voice && !input.deliveredMedia?.voiceUrl) {
+    reasons.push('Voice asset is missing');
+  } else if (input.deliveredMedia?.voiceUrl && isEphemeralMediaReference(input.deliveredMedia.voiceUrl)) {
+    reasons.push('Voice asset is playback-only and not durable');
+  }
+
+  if (input.requestedModalities?.music && !input.deliveredMedia?.musicUrl) {
+    reasons.push('Music asset is missing');
+  }
+
+  if (
+    (input.requestedModalities?.voice || input.requestedModalities?.music) &&
+    (input.deliveredMedia?.imageUrl || input.deliveredMedia?.videoUrl) &&
+    !input.deliveredMedia?.finalVideoUrl
+  ) {
+    reasons.push('Final assembled media export is missing');
   }
 
   if (input.visualPrompts) {

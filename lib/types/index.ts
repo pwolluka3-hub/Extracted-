@@ -292,6 +292,7 @@ declare global {
       fs: {
         write: (path: string, content: string | Blob, options?: { createMissingParents?: boolean }) => Promise<void>;
         read: (path: string) => Promise<Blob>;
+        getReadURL?: (path: string) => Promise<string>;
         mkdir: (path: string, options?: { createMissingParents?: boolean }) => Promise<void>;
         readdir: (path: string) => Promise<{ name: string; is_dir: boolean }[]>;
         delete: (path: string) => Promise<void>;
