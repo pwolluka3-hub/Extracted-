@@ -788,24 +788,41 @@ export async function universalChat(
     model?: string;
     brandKit?: BrandKit | null;
     stream?: boolean;
+    avoidPuter?: boolean;
   } = {}
 ): Promise<string> {
-  const { model = 'gpt-4o' } = options;
+  const { model = 'gpt-4o', avoidPuter = false } = options;
   const configuredProviders = await getConfiguredProviders();
+  const allowedProviders = avoidPuter
+    ? configuredProviders.filter((provider) => provider !== 'puter')
+    : configuredProviders;
   const preferredConfig = AVAILABLE_MODELS.find((candidate) => candidate.model === model);
   const preferredProvider = (preferredConfig?.provider || 'puter') as RoutedProvider;
+  const routedPreferredProvider =
+    avoidPuter && preferredProvider === 'puter'
+      ? allowedProviders[0] || preferredProvider
+      : preferredProvider;
+  const routedModel =
+    avoidPuter && preferredProvider === 'puter'
+      ? PROVIDER_DEFAULT_MODELS[routedPreferredProvider]?.[0] || model
+      : model;
+
+  if (avoidPuter && allowedProviders.length === 0) {
+    throw new Error('No non-Puter AI provider is configured for this task.');
+  }
+
   const disablePuterFallback = await isPuterFallbackDisabled();
-  const fallbackProviders = buildFallbackProviders(preferredProvider, configuredProviders, {
-    disablePuterFallback,
+  const fallbackProviders = buildFallbackProviders(routedPreferredProvider, allowedProviders, {
+    disablePuterFallback: disablePuterFallback || avoidPuter,
   });
 
   const candidateModels = Array.from(new Set(
     fallbackProviders.flatMap((provider) => {
-      if (provider === preferredProvider) {
+      if (provider === routedPreferredProvider) {
         const sameProviderModels = AVAILABLE_MODELS
-          .filter((entry) => entry.provider === preferredProvider)
+          .filter((entry) => entry.provider === routedPreferredProvider)
           .map((entry) => entry.model);
-        return [model, ...sameProviderModels];
+        return [routedModel, ...sameProviderModels];
       }
 
       const providerDefaults = PROVIDER_DEFAULT_MODELS[provider];
@@ -1055,6 +1072,7 @@ export async function chat(
     brandKit?: BrandKit | null;
     stream?: boolean;
     memoryContext?: string;
+    avoidPuter?: boolean;
   } = {}
 ): Promise<string> {
   const options = typeof optionsOrModel === 'string'
@@ -1062,6 +1080,9 @@ export async function chat(
     : optionsOrModel;
 
   if (options.stream) {
+    if (options.avoidPuter) {
+      throw new Error('Streaming chat requires Puter and cannot run with avoidPuter enabled.');
+    }
     return chatWithPuter(messages, options);
   }
 

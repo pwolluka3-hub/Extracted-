@@ -12,6 +12,7 @@ import {
   buildFileAnalysisEmptyResponseMessage,
   buildFileAnalysisFailureMessage,
   getConversationalExecutionTask,
+  shouldAvoidPuterForIntent,
 } from '../lib/context/agentBehavior.mjs';
 
 test('normalizeIncomingMessage handles blank content with files', () => {
@@ -67,6 +68,7 @@ test('isContinuationOrRetryCue detects continuation and retry phrases', () => {
   assert.equal(isContinuationOrRetryCue('continue'), true);
   assert.equal(isContinuationOrRetryCue('Try again'), true);
   assert.equal(isContinuationOrRetryCue('run again!'), true);
+  assert.equal(isContinuationOrRetryCue('Try generating the video again'), true);
   assert.equal(isContinuationOrRetryCue('make a new image'), false);
 });
 
@@ -111,6 +113,13 @@ test('isMediaGenerationRequest detects explicit video and image generation reque
   assert.equal(isMediaGenerationRequest('make a cinematic video ad for my launch'), true);
   assert.equal(isMediaGenerationRequest('studio product photo for a luxury perfume launch'), true);
   assert.equal(isMediaGenerationRequest('how do i improve my video quality?'), false);
+});
+
+test('shouldAvoidPuterForIntent keeps media sidecar work off Puter', () => {
+  assert.equal(shouldAvoidPuterForIntent('make_video', 'generate a launch video'), true);
+  assert.equal(shouldAvoidPuterForIntent('create_image', 'make a product image'), true);
+  assert.equal(shouldAvoidPuterForIntent('regenerate_media', 'try generating the video again'), true);
+  assert.equal(shouldAvoidPuterForIntent('answer_question', 'how do i improve my video quality?'), false);
 });
 
 test('buildMediaGenerationFailureMessage keeps media failures out of generic advice mode', () => {

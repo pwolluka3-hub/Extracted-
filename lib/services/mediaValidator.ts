@@ -69,7 +69,7 @@ Respond with JSON:
       }
     ];
 
-    const response = await chat(messages as any, { model: 'gpt-4o' });
+    const response = await chat(messages as any, { model: 'gpt-4o', avoidPuter: true });
     
     // Parse the response
     const jsonMatch = response.match(/\{[\s\S]*\}/);

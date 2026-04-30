@@ -539,7 +539,10 @@ export function extractMemoryFromResponse(response: string): {
 
 export async function extractStructuredMemory(
   userMessage: string,
-  aiResponse?: string
+  aiResponse?: string,
+  options: {
+    avoidPuter?: boolean;
+  } = {}
 ): Promise<MemoryExtraction> {
   const prompt = `Extract persistent memory from this conversation turn.
 
@@ -566,11 +569,14 @@ Return strict JSON:
 Rules:
 - Prefer empty strings or empty arrays over guessing.
 - Extract platform names only if explicitly or strongly implied.
-- Extract content ideas only if they are specific enough to reuse later.
-- Keep entries concise.`;
+  - Extract content ideas only if they are specific enough to reuse later.
+  - Keep entries concise.`;
 
   try {
-    const response = await universalChat(prompt, { model: 'gpt-4o-mini' });
+    const response = await universalChat(prompt, {
+      model: 'gpt-4o-mini',
+      avoidPuter: options.avoidPuter ?? false,
+    });
     const jsonMatch = response.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return {};
     const parsed = JSON.parse(jsonMatch[0]);

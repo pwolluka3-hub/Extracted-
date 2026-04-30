@@ -298,7 +298,7 @@ Return a JSON object with this exact structure:
 Create ${Math.ceil(options.targetDuration / 5)}-${Math.ceil(options.targetDuration / 3)} scenes that flow naturally.`;
 
   try {
-    const response = await chat(prompt, { model: 'gpt-4o' });
+    const response = await chat(prompt, { model: 'gpt-4o', avoidPuter: true });
     const jsonMatch = response.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('Invalid response format');
     

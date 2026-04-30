@@ -228,6 +228,92 @@ function describeScenePlan(plan: ScenePlan): string {
     .join('\n');
 }
 
+function buildDeterministicMediaPlan(
+  request: string,
+  kind: MediaKind,
+  options: {
+    videoIntent: VideoIntentProfile | null;
+    imageIntent: ReturnType<typeof inferImagePlatform> | null;
+    cameraSpecs: ReturnType<typeof inferCameraSpecs>;
+    scenePlan: ScenePlan | null;
+    maxFidelity: boolean;
+    humanStudioRealism: boolean;
+  }
+): MediaPromptPlan {
+  const aspectRatio = clampAspectRatio(
+    kind === 'video' ? options.videoIntent?.aspectRatio : options.imageIntent?.aspectRatio
+  );
+
+  if (kind === 'video') {
+    const durationSeconds = options.videoIntent?.durationSeconds || 18;
+    const prompt = [
+      request.trim(),
+      `Produce a finished ${aspectRatio === '9:16' ? 'vertical social-first' : 'cinematic widescreen'} video.`,
+      `Runtime target: ${durationSeconds} seconds.`,
+      `Camera: ${options.cameraSpecs.focalLength}, ${options.cameraSpecs.aperture}, ${options.cameraSpecs.frameRate || '24fps'}, ${options.cameraSpecs.movement || 'gimbal-stabilized cinematic move'}.`,
+      options.maxFidelity
+        ? 'Target prestige-streaming realism, premium production design, stable character identity, and physically plausible motion.'
+        : 'Target clean cinematic realism, stable motion, and polished social-ready pacing.',
+      'Keep lighting believable, motion natural, faces consistent, and avoid jitter, morphing, slideshow pacing, or synthetic CGI texture.',
+      options.scenePlan
+        ? `Storyboard continuity:\n${describeScenePlan(options.scenePlan)}`
+        : 'Structure the clip with a clear opening hook, one main progression beat, and a crisp visual payoff.',
+      'Audio guidance: voice-forward mix, subtle cinematic underscore, clean transition effects, no muddy low-end.',
+    ].join(' ');
+
+    return {
+      prompt,
+      negativePrompt: 'low quality, blur, flicker, frame inconsistency, identity drift, face morphing, warped anatomy, robotic motion, jitter, slideshow feel, text overlay, watermark, logo',
+      aspectRatio,
+      durationSeconds,
+      cameraAngle: 'eye-level',
+      cameraMotion: options.cameraSpecs.movement || 'slow push-in',
+      shotStyle: 'cinematic controlled framing',
+      reasoning: 'Deterministic media plan used to keep video sidecar helpers off Puter.',
+      agentOutputs: [],
+      scenePlan: options.scenePlan || undefined,
+      platform: aspectRatio === '9:16' ? 'Reels/TikTok/Shorts' : 'YouTube/Long-form',
+      messageHook: 'Open on the clearest visual promise and escalate without breaking continuity.',
+      fallbackPrompts: {
+        primary: prompt,
+        fallback_stability: `${prompt} cinematic realism, stable motion, natural performance, no text, no watermark`,
+        fallback_midjourney: `${prompt} --ar ${aspectRatio === '9:16' ? '9:16' : '16:9'}`,
+        fallback_replicate: `${request.trim()} realistic video, stable motion, premium lighting, clean continuity`,
+      },
+      brandFitCheck: 'Keeps the output grounded and premium without waking Puter for helper tasks.',
+      expectedPerformance: 'Designed for direct execution with strong opening clarity and stable visual continuity.',
+      cameraSpecs: `${options.cameraSpecs.focalLength}, ${options.cameraSpecs.aperture}, ${options.cameraSpecs.frameRate || '24fps'}, ${options.cameraSpecs.movement || 'cinematic move'}`,
+      audioPlan: 'Voice-forward mix with subtle underscore and clean transitions.',
+    };
+  }
+
+  const imageIntent = options.imageIntent || inferImagePlatform(request);
+  const prompt = options.humanStudioRealism
+    ? `${request.trim()} Create a natural live-action studio image for ${imageIntent.platform} ${imageIntent.dimensions}. Real human skin texture, accurate anatomy, premium editorial lighting, realistic lens behavior, cyan and violet brand accents, dark premium background.`
+    : `${request.trim()} Create a premium ${imageIntent.platform} image for ${imageIntent.dimensions} with clear focal hierarchy, dark futuristic styling, and natural cyan/violet brand accents. Camera: ${options.cameraSpecs.focalLength}, ${options.cameraSpecs.aperture}.`;
+
+  return {
+    prompt,
+    negativePrompt: options.humanStudioRealism
+      ? 'cartoon, anime, illustration, cgi, doll face, plastic skin, extra fingers, distorted anatomy, lowres, blurry, watermark'
+      : 'low quality, blurry, watermark, text overlay, distorted anatomy, cartoon, anime, illustration, cgi',
+    aspectRatio,
+    reasoning: 'Deterministic media plan used to keep image sidecar helpers off Puter.',
+    agentOutputs: [],
+    platform: imageIntent.platform,
+    messageHook: 'One clear focal subject with immediate stop-scroll clarity.',
+    fallbackPrompts: {
+      primary: prompt,
+      fallback_stability: `${prompt} photorealistic, premium composition, no text, no watermark`,
+      fallback_midjourney: `${prompt} --ar ${aspectRatio === '9:16' ? '9:16' : aspectRatio === '4:5' ? '4:5' : '16:9'}`,
+      fallback_replicate: `${request.trim()} realistic premium image, sharp focus, dark premium background`,
+    },
+    brandFitCheck: 'Preserves the dark premium NexusAI look while keeping helper calls Puter-silent.',
+    expectedPerformance: `${imageIntent.platform}-optimized composition designed for clarity and contrast.`,
+    cameraSpecs: `${options.cameraSpecs.focalLength}, ${options.cameraSpecs.aperture}, premium editorial lensing.`,
+  };
+}
+
 async function buildMediaPrompt(
   request: string,
   kind: MediaKind,
@@ -256,9 +342,17 @@ async function buildMediaPrompt(
             : 'cinematic realism, premium streaming quality, natural performance',
         }).catch(() => null)
       : null;
+  const fallbackPlan = buildDeterministicMediaPlan(request, kind, {
+    videoIntent,
+    imageIntent,
+    cameraSpecs,
+    scenePlan,
+    maxFidelity,
+    humanStudioRealism,
+  });
 
   const aiProvider = async (prompt: string): Promise<string> =>
-    universalChat(prompt, { model: preferredModel || 'gpt-4o', brandKit });
+    universalChat(prompt, { model: preferredModel || 'gpt-4o', brandKit, avoidPuter: true });
 
   const context = {
     brandContext: brandKit ? JSON.stringify(brandKit) : '',
@@ -268,13 +362,19 @@ async function buildMediaPrompt(
     recentPerformance: 'Media requests should return finished assets, not a concept summary.',
   };
 
-  const agentOutputs = (
-    await Promise.all(
-      [visualAgent, strategistAgent]
-        .filter(Boolean)
-        .map(agent => executeAgentTask(agent!, request, context, aiProvider))
-    )
-  ).filter(output => output.content.trim().length > 0);
+  let agentOutputs: AgentOutput[] = [];
+  try {
+    agentOutputs = (
+      await Promise.all(
+        [visualAgent, strategistAgent]
+          .filter(Boolean)
+          .map(agent => executeAgentTask(agent!, request, context, aiProvider))
+      )
+    ).filter(output => output.content.trim().length > 0);
+  } catch (error) {
+    console.warn('Media specialist planning failed, using deterministic fallback plan', error);
+    return fallbackPlan;
+  }
 
   const synthesisPrompt = `You are the Nexus media governor.
 
@@ -337,20 +437,27 @@ Return strict JSON:
   "audioPlan": "audio mix summary for video, optional for image"
 }`;
 
-  const synthesis = await universalChat(synthesisPrompt, {
-    model: preferredModel || 'gpt-4o',
-    brandKit,
-  });
+  let synthesis: string;
+  try {
+    synthesis = await universalChat(synthesisPrompt, {
+      model: preferredModel || 'gpt-4o',
+      brandKit,
+      avoidPuter: true,
+    });
+  } catch (error) {
+    console.warn('Media prompt synthesis failed, using deterministic fallback plan', error);
+    return fallbackPlan;
+  }
 
   const jsonMatch = synthesis.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
-    throw new Error('Failed to build a media generation plan');
+    return fallbackPlan;
   }
 
   const parsed = JSON.parse(jsonMatch[0]);
   const prompt = String(parsed.prompt || '').trim();
   if (!prompt) {
-    throw new Error('Media prompt plan was empty');
+    return fallbackPlan;
   }
 
   const validation = await validateContent(prompt, {

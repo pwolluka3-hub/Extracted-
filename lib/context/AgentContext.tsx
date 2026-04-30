@@ -64,6 +64,7 @@ import {
   buildFileAnalysisEmptyResponseMessage,
   buildFileAnalysisFailureMessage,
   getConversationalExecutionTask,
+  shouldAvoidPuterForIntent,
 } from './agentBehavior.mjs';
 import { ensureAgentSkillsInstalled, getEnabledAgentSkills, buildAgentSkillContext } from '@/lib/services/agentSkillService';
 import {
@@ -1015,9 +1016,13 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     }
 
     try {
+      const shouldAvoidPuterForDetection = /\b(video|clip|reel|shorts?|animation|short film|image|photo|picture|thumbnail|illustration|poster|artwork)\b/i.test(trimmedMessage);
       const response = await universalChat(
         `${INTENT_DETECTION_PROMPT}\n\nUser message: "${message}"`,
-        { model: 'gpt-4o-mini' }
+        {
+          model: 'gpt-4o-mini',
+          avoidPuter: shouldAvoidPuterForDetection,
+        }
       );
       
       const jsonMatch = response.match(/\{[\s\S]*\}/);
@@ -1258,6 +1263,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       platform?: string;
       brandKit?: Awaited<ReturnType<typeof loadBrandKit>>;
       request?: string;
+      avoidPuter?: boolean;
     } = {}
   ): Promise<string> => {
     const original = (content || '').trim();
@@ -1266,6 +1272,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     }
 
     let candidate = original;
+    const shouldAvoidPuter =
+      options.avoidPuter ?? (options.request ? isMediaGenerationRequest(options.request) : false);
 
     try {
       for (let pass = 0; pass < 3; pass++) {
@@ -1307,7 +1315,11 @@ Rules:
               { role: 'system', content: 'You are Nexus Governor Rewrite. Return one improved final response only.' },
               { role: 'user', content: rewriteInstruction },
             ],
-            { model: decision.alternativeModel || state.currentModel, brandKit: options.brandKit || undefined }
+            {
+              model: decision.alternativeModel || state.currentModel,
+              brandKit: options.brandKit || undefined,
+              avoidPuter: shouldAvoidPuter,
+            }
           );
 
           if (rewritten && rewritten.trim()) {
@@ -1322,7 +1334,11 @@ Rules:
               { role: 'system', content: 'Provide a concise, natural-sounding final response. Be direct, non-robotic, and willing to challenge weak ideas with clear reasoning.' },
               { role: 'user', content: `Request: ${options.request || 'N/A'}\n\nDraft response: ${candidate}` },
             ],
-            { model: state.currentModel, brandKit: options.brandKit || undefined }
+            {
+              model: state.currentModel,
+              brandKit: options.brandKit || undefined,
+              avoidPuter: shouldAvoidPuter,
+            }
           );
 
           if (forcedFallback && forcedFallback.trim()) {
@@ -1356,7 +1372,11 @@ Rules:
               content: `User request:\n${options.request || 'N/A'}\n\nCurrent response:\n${finalCandidate}\n\nMood target:\n- Primary: ${moodApproval.mood.primary}\n- Tempo: ${moodApproval.mood.tempo}\n- Energy: ${moodApproval.mood.energy}\n\nFix these issues:\n${moodApproval.reasons.map((reason) => `- ${reason}`).join('\n')}`,
             },
           ],
-          { model: state.currentModel, brandKit: options.brandKit || undefined }
+          {
+            model: state.currentModel,
+            brandKit: options.brandKit || undefined,
+            avoidPuter: shouldAvoidPuter,
+          }
         );
 
         if (humanized && humanized.trim()) {
@@ -1451,6 +1471,7 @@ Rules:
   const extractAndSaveMemory = async (userMessage: string, aiResponse: string, intent: AgentIntent) => {
     try {
       const lowerMessage = userMessage.toLowerCase();
+      const avoidPuterForStructuredMemory = shouldAvoidPuterForIntent(intent.type, userMessage);
       const platformMatches = Array.from(new Set(
         ['instagram', 'tiktok', 'youtube', 'linkedin', 'twitter', 'x', 'facebook', 'threads', 'pinterest']
           .filter(platform => lowerMessage.includes(platform))
@@ -1558,7 +1579,9 @@ Rules:
         }
       }
 
-      const structuredMemory = await extractStructuredMemory(userMessage, aiResponse);
+      const structuredMemory = await extractStructuredMemory(userMessage, aiResponse, {
+        avoidPuter: avoidPuterForStructuredMemory,
+      });
 
       if (structuredMemory.niche) {
         await setPrimaryNiche(structuredMemory.niche);
