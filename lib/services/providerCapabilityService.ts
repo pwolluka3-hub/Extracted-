@@ -4,6 +4,7 @@
  */
 
 import { kvGet, kvSet, readFile, writeFile, PATHS } from './puterService';
+import { pickRecommendedModel } from './providerModelSelection.mjs';
 
 export interface ProviderCapability {
   id: string;
@@ -363,35 +364,7 @@ export function getRecommendedModel(
   taskType: 'chat' | 'vision' | 'code' | 'creative' | 'analysis' | 'fast',
   providers: ProviderCapability[]
 ): { providerId: string; modelId: string } | null {
-  const healthyProviders = providers.filter(p => p.status === 'healthy' && p.apiKeyConfigured);
-
-  if (healthyProviders.length === 0) return null;
-
-  // Priority order based on task type
-  const priorityMap: Record<string, string[][]> = {
-    chat: [['puter', 'gpt-4o-mini'], ['puter', 'gpt-4o'], ['groq', 'llama-3.3-70b-versatile']],
-    vision: [['puter', 'gpt-4o'], ['openrouter', 'google/gemini-2.0-flash']],
-    code: [['deepseek', 'deepseek-coder'], ['puter', 'gpt-4o'], ['groq', 'llama-3.3-70b-versatile']],
-    creative: [['puter', 'claude-sonnet-4-5'], ['puter', 'gpt-4o'], ['openrouter', 'anthropic/claude-3.5-sonnet']],
-    analysis: [['puter', 'claude-opus-4'], ['puter', 'gpt-4o'], ['openrouter', 'anthropic/claude-3.5-sonnet']],
-    fast: [['groq', 'llama-3.3-70b-versatile'], ['puter', 'gpt-4o-mini'], ['ollama', 'ollama/mistral']],
-  };
-
-  const priorities = priorityMap[taskType] || priorityMap.chat;
-
-  for (const [providerId, modelId] of priorities) {
-    const provider = healthyProviders.find(p => p.id === providerId);
-    if (provider) {
-      const model = provider.models.find(m => m.id === modelId);
-      if (model && !model.deprecated) {
-        return { providerId, modelId };
-      }
-    }
-  }
-
-  // Fallback to first healthy provider's first model
-  const fallback = healthyProviders[0];
-  return { providerId: fallback.id, modelId: fallback.models[0].id };
+  return pickRecommendedModel(taskType, providers);
 }
 
 // Track usage

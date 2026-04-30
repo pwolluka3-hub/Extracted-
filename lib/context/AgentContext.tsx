@@ -61,6 +61,7 @@ import {
   isFileAnalysisFailure,
   buildFileAnalysisEmptyResponseMessage,
   buildFileAnalysisFailureMessage,
+  getConversationalExecutionTask,
 } from './agentBehavior.mjs';
 import { ensureAgentSkillsInstalled, getEnabledAgentSkills, buildAgentSkillContext } from '@/lib/services/agentSkillService';
 import {
@@ -95,7 +96,7 @@ const SIMPLE_GREETING_PATTERN = /^(?:hi|hello|hey|yo|sup|what(?:'| i)?s up|good 
 const FILE_ANALYSIS_CUE_PATTERN = /\b(analy[sz]e|review|read|extract|summari[sz]e|parse|transcribe|use this (?:pdf|file|document)|from this (?:pdf|file|document)|what(?:'| i)?s in (?:this|the) (?:pdf|file|document))\b/i;
 const DETAIL_HANDOFF_PATTERN = /\b(i(?:\s+am|'m)?\s+(?:going to|gonna)|i(?:'| a)?ll|let me|about to)\s+(?:give|share|send|provide)\b.*\b(detail|description|brief|profile|context|info)\b/i;
 const SCENE_REQUEST_PATTERN = /\b(scene|storyboard|shot list|cinematic scene|loop[- ]friendly|camera movement)\b/i;
-const UNIVERSAL_PIPELINE_PATTERN = /\b(multimodal|text\s*\+\s*image|image\s*\+\s*video|voice|music|sound design|final mix|production pipeline|full stack)\b/i;
+const UNIVERSAL_PIPELINE_PATTERN = /\b(multimodal|text\s*\+\s*image|image\s*\+\s*video|voice(?:over)?|music|sound(?:track| design)?|audio mix|final mix|production pipeline|full stack|scene breakdown|storyboard|shot list)\b/i;
 const FILE_CONTEXT_LIMIT = 12_000;
 const PAGE_BLOCK_PATTERN = /\[Page \d+\][\s\S]*?(?=\n\n\[Page \d+\]|$)/g;
 const NICHE_CLARIFICATION_PATTERN = /\bwhat niche should i lock before generating\??\b/i;
@@ -205,12 +206,12 @@ function extractPrimaryBodyForScheduling(content: string): string {
   if (!trimmed) return '';
 
   const primaryPost = trimmed.match(
-    /Primary post:\s*([\s\S]*?)(?:\n\n(?:Platform versions|Alternate hooks\/angles|Assets:|Quality score:|Queued jobs:)|$)/i
+    /Primary post:\s*([\s\S]*?)(?:\n\n(?:Platform versions|Alternate hooks\/angles|Assets:|Audio mix:|Warnings:|Quality score:|Queued jobs:)|$)/i
   );
   if (primaryPost?.[1]) return primaryPost[1].trim();
 
   const primaryScript = trimmed.match(
-    /Primary script:\s*([\s\S]*?)(?:\n\n(?:Platform cuts|Assets:|Quality score:|Queued jobs:)|$)/i
+    /Primary script:\s*([\s\S]*?)(?:\n\n(?:Platform cuts|Assets:|Audio mix:|Warnings:|Quality score:|Queued jobs:)|$)/i
   );
   if (primaryScript?.[1]) return primaryScript[1].trim();
 
@@ -325,6 +326,36 @@ function looksLikeCharacterDescriptor(message: string): boolean {
 
 function wantsUniversalPipeline(message: string): boolean {
   return UNIVERSAL_PIPELINE_PATTERN.test(message.trim().toLowerCase());
+}
+
+function deriveUniversalPipelineAssetPlan(message: string): {
+  includeImage: boolean;
+  includeVideo: boolean;
+  includeVoice: boolean;
+  includeMusic: boolean;
+} {
+  const normalized = message.trim().toLowerCase();
+  const fullPipelineRequested = /\b(multimodal|production pipeline|full stack|final mix|complete pipeline|full campaign)\b/.test(normalized);
+  const includeImage = fullPipelineRequested || /\b(image|photo|picture|thumbnail|poster|cover art|visual)\b/.test(normalized);
+  const includeVideo = fullPipelineRequested || /\b(video|reel|clip|shorts?|animation|storyboard|scene breakdown|shot list)\b/.test(normalized);
+  const includeVoice = fullPipelineRequested || /\b(voice|voiceover|narration|spoken|tts)\b/.test(normalized);
+  const includeMusic = fullPipelineRequested || /\b(music|soundtrack|score|sound design|sfx|fx|audio mix|final mix|ambient)\b/.test(normalized);
+
+  if (includeImage || includeVideo || includeVoice || includeMusic) {
+    return {
+      includeImage,
+      includeVideo,
+      includeVoice,
+      includeMusic,
+    };
+  }
+
+  return {
+    includeImage: true,
+    includeVideo: true,
+    includeVoice: true,
+    includeMusic: true,
+  };
 }
 
 function buildFileContextPreview(text: string): string {
@@ -2380,13 +2411,14 @@ Rules:
         let generatedResponse: string;
 
         if (shouldRunUniversalPipeline) {
+          const assetPlan = deriveUniversalPipelineAssetPlan(normalizedContent);
           const pipeline = await runUniversalContentPipeline({
             prompt: fileContext ? `${effectiveIdea}\n\nSource material:\n${fileContext}` : effectiveIdea,
             platforms,
-            includeImage: true,
-            includeVideo: true,
-            includeVoice: true,
-            includeMusic: true,
+            includeImage: assetPlan.includeImage,
+            includeVideo: assetPlan.includeVideo,
+            includeVoice: assetPlan.includeVoice,
+            includeMusic: assetPlan.includeMusic,
             enqueueForPosting: /\b(queue|schedule|post later|autopilot)\b/i.test(normalizedContent),
             generationId: tracked.record.id,
           });
@@ -2411,6 +2443,16 @@ Rules:
             pipeline.audio.voiceUrl ? `Voice: ${pipeline.audio.voiceUrl}` : null,
             pipeline.audio.musicUrl ? `Music: ${pipeline.audio.musicUrl}` : null,
           ].filter(Boolean);
+          const audioSummary = assetPlan.includeVoice || assetPlan.includeMusic
+            ? [
+                `Voice ${Math.round(pipeline.audio.mixPlan.settings.voiceVolume * 100)}%`,
+                `Music ${Math.round(pipeline.audio.mixPlan.settings.musicVolume * 100)}%`,
+                `FX ${Math.round(pipeline.audio.mixPlan.settings.fxVolume * 100)}%`,
+                pipeline.audio.mixPlan.settings.duckingEnabled ? 'ducking enabled' : null,
+              ]
+                .filter(Boolean)
+                .join(' | ')
+            : '';
 
           const platformSummary = pipeline.platformPackages
             .map((pkg) => `${pkg.platform}: ${pkg.text}`)
@@ -2427,6 +2469,8 @@ Rules:
               '',
               platformSummary ? `Platform cuts:\n${platformSummary}` : '',
               assets.length > 0 ? `Assets:\n${assets.join('\n')}` : '',
+              audioSummary ? `Audio mix:\n${audioSummary}` : '',
+              pipeline.warnings.length > 0 ? `Warnings:\n- ${pipeline.warnings.slice(0, 3).join('\n- ')}` : '',
               `Quality score: ${pipeline.criticVerdict.score}${pipeline.criticVerdict.approved ? ' (approved)' : ' (needs revision)'}`,
               pipeline.queueIds.length > 0 ? `Queued jobs: ${pipeline.queueIds.join(', ')}` : '',
             ]
@@ -2515,15 +2559,7 @@ Rules:
         }
       }
 
-      activeModel = await resolveExecutionModel(
-        intent.type === 'read_file'
-          ? 'analysis'
-          : intent.type === 'manage_brand'
-          ? 'analysis'
-          : intent.type === 'answer_question' && normalizedContent.length > 220
-          ? 'analysis'
-          : 'chat'
-      );
+      activeModel = await resolveExecutionModel(getConversationalExecutionTask(intent.type));
 
       // Call AI
       const chatGenerationStart = Date.now();

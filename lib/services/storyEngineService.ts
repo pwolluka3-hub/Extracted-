@@ -13,24 +13,31 @@ export async function buildStoryContent(
   request: string,
   profile: BrandProfile
 ): Promise<StoryEngineResult> {
-  const prompt = `Create a high-retention script for this request.
+  const prompt = `You are the Story Engine inside a universal AI content pipeline.
+Create a production-ready script, not a brainstorming outline.
 
 Request: ${request}
 Niche: ${profile.niche}
 Tone: ${profile.tone}
 Goal: ${profile.goal}
 Audience intent: ${profile.audienceIntent}
+Audience: ${profile.audience}
+Emotional triggers: ${profile.emotionalTriggers.join(', ')}
+Style tags: ${profile.styleTags.join(', ')}
 
 Rules:
-- First line must be a strong hook.
-- Keep it concise and cinematic.
-- End with an unresolved loop-friendly beat.
+- The first line must win the first 3 seconds with tension, curiosity, contrast, or emotional spike.
+- Keep it concise, cinematic, and platform-native.
+- Build a clear progression: hook -> build-up -> payoff -> unresolved loop.
+- Favor visual beats and spoken rhythm over exposition.
+- If the niche is narrative, preserve character continuity and escalate stakes.
+- If the niche is educational or business, keep it specific, useful, and direct.
 
 Return JSON:
 {
   "hook": "string",
   "script": "string",
-  "episodicArc": ["beat 1", "beat 2", "beat 3"]
+  "episodicArc": ["beat 1", "beat 2", "beat 3", "beat 4"]
 }`;
 
   try {

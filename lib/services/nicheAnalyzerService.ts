@@ -31,6 +31,18 @@ const DEFAULT_PROFILE: BrandProfile = {
   styleTags: ['cinematic', 'concise'],
 };
 
+function sanitizeStringList(values: unknown, fallback: string[], limit = 6): string[] {
+  if (!Array.isArray(values)) return fallback;
+
+  const cleaned = values
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .slice(0, limit);
+
+  return cleaned.length > 0 ? cleaned : fallback;
+}
+
 function detectContentType(text: string): BrandProfile['contentType'] {
   const lower = text.toLowerCase();
   if (/\b(story|scene|character|episode|narrative|cinematic)\b/.test(lower)) return 'story';
@@ -63,7 +75,9 @@ export async function analyzeNiche(input: NicheAnalysisInput): Promise<BrandProf
   };
 
   try {
-    const prompt = `Extract a compact brand profile from this request.
+    const prompt = `You are the Niche Analyzer inside a universal AI content engine.
+Extract a compact brand profile that can drive text, image, video, voice, music, sound design, and platform optimization.
+Be specific and avoid generic labels.
 
 REQUEST:
 ${merged}
@@ -79,7 +93,7 @@ Return valid JSON only:
   "emotionalTriggers": ["..."],
   "styleTags": ["..."]
 }`;
-    const response = await universalChat(prompt, { model: 'gpt-4o-mini' });
+    const response = await universalChat(prompt, { model: 'gpt-4o' });
     const match = response.match(/\{[\s\S]*\}/);
     if (!match) return heuristic;
     const parsed = JSON.parse(match[0]) as Partial<BrandProfile>;
@@ -91,8 +105,8 @@ Return valid JSON only:
       contentType: parsed.contentType || heuristic.contentType,
       audienceIntent: parsed.audienceIntent || heuristic.audienceIntent,
       audience: parsed.audience?.trim() || heuristic.audience,
-      emotionalTriggers: parsed.emotionalTriggers?.filter(Boolean).slice(0, 6) || heuristic.emotionalTriggers,
-      styleTags: parsed.styleTags?.filter(Boolean).slice(0, 6) || heuristic.styleTags,
+      emotionalTriggers: sanitizeStringList(parsed.emotionalTriggers, heuristic.emotionalTriggers),
+      styleTags: sanitizeStringList(parsed.styleTags, heuristic.styleTags),
     };
   } catch {
     return heuristic;

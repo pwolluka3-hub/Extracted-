@@ -9,6 +9,7 @@ import {
   isFileAnalysisFailure,
   buildFileAnalysisEmptyResponseMessage,
   buildFileAnalysisFailureMessage,
+  getConversationalExecutionTask,
 } from '../lib/context/agentBehavior.mjs';
 
 test('normalizeIncomingMessage handles blank content with files', () => {
@@ -122,4 +123,11 @@ test('buildFileAnalysisFailureMessage returns retry guidance when no extraction 
     buildFileAnalysisFailureMessage(''),
     'I received the file but the analysis model failed before returning content. Retry now, or switch to a vision-capable model/provider if this PDF is scanned.'
   );
+});
+
+test('getConversationalExecutionTask routes questions and file work through analysis', () => {
+  assert.equal(getConversationalExecutionTask('answer_question'), 'analysis');
+  assert.equal(getConversationalExecutionTask('manage_brand'), 'analysis');
+  assert.equal(getConversationalExecutionTask('read_file'), 'analysis');
+  assert.equal(getConversationalExecutionTask('generate_content'), 'chat');
 });

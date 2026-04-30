@@ -132,6 +132,21 @@ function buildStructure(profile: BrandProfile): string {
   return 'Hook -> Retention Beat -> Loop/CTA';
 }
 
+function ensureHookLead(text: string, hook: string): string {
+  const trimmedText = text.trim();
+  const trimmedHook = hook.trim();
+
+  if (!trimmedText) return trimmedHook;
+  if (!trimmedHook) return trimmedText;
+
+  const firstLine = trimmedText.split('\n').map((line) => line.trim()).find(Boolean) || '';
+  if (firstLine.toLowerCase() === trimmedHook.toLowerCase()) {
+    return trimmedText;
+  }
+
+  return `${trimmedHook}\n\n${trimmedText}`;
+}
+
 export async function runUniversalContentPipeline(
   request: UniversalPipelineRequest
 ): Promise<UniversalPipelineResult> {
@@ -166,10 +181,11 @@ export async function runUniversalContentPipeline(
   const amplifiedHook = amplifyHook(story.hook);
   const lockedScript = character ? enforceCharacterLock(story.script, character) : story.script;
   const warnings: string[] = [];
+  let characterConsistencyScore: number | null = null;
   if (character) {
-    const consistencyScore = scoreCharacterConsistency(lockedScript, character);
-    if (consistencyScore < 70) {
-      warnings.push(`Character consistency is weak (${consistencyScore}/100). Regeneration or tighter brief is recommended.`);
+    characterConsistencyScore = scoreCharacterConsistency(lockedScript, character);
+    if (characterConsistencyScore < 70) {
+      warnings.push(`Character consistency is weak (${characterConsistencyScore}/100). Regeneration or tighter brief is recommended.`);
     }
   }
 
@@ -193,7 +209,9 @@ export async function runUniversalContentPipeline(
     };
   }
 
-  const scenes = directScenes(generated.text);
+  const finalScript = ensureHookLead(generated.text, amplifiedHook.hook);
+
+  const scenes = directScenes(finalScript);
   const emotion = mapEmotionFromScene(scenes.map((scene) => scene.description).join('\n'));
   const beatPlan = buildBeatTimingPlan(12, emotion.emotion);
   const soundDesign = buildSoundDesignPlan(emotion.emotion, beatPlan);
@@ -245,7 +263,7 @@ export async function runUniversalContentPipeline(
   if (request.includeVoice !== false) {
     try {
       const voice = await generateVoice({
-        text: generated.text,
+        text: finalScript,
         provider: 'web-speech',
         speed: emotion.pacing === 'slow' ? 0.88 : emotion.pacing === 'fast' ? 1.08 : 1,
       });
@@ -258,7 +276,7 @@ export async function runUniversalContentPipeline(
   let musicUrl: string | undefined;
   if (request.includeMusic !== false) {
     try {
-      const music = await generateBackgroundMusic(generated.text, { duration: beatPlan.durationSeconds });
+      const music = await generateBackgroundMusic(finalScript, { duration: beatPlan.durationSeconds });
       musicUrl = music?.url;
       if (!musicUrl) {
         warnings.push('Music generation returned no asset URL.');
@@ -268,10 +286,20 @@ export async function runUniversalContentPipeline(
     }
   }
 
-  const platformOptimized = optimizeForPlatforms(generated.text, generated.hashtags, platforms);
+  const platformOptimized = optimizeForPlatforms(finalScript, generated.hashtags, platforms);
   const quality = await runQualityControl({
-    text: generated.text,
+    text: finalScript,
     platform: platforms[0],
+    hook: amplifiedHook.hook,
+    mixPlan,
+    visualPrompts: visualPromptSource,
+    characterConsistencyScore,
+    requestedModalities: {
+      image: request.includeImage !== false,
+      video: request.includeVideo !== false,
+      voice: request.includeVoice !== false,
+      music: request.includeMusic !== false,
+    },
   });
 
   const queueIds: string[] = [];
@@ -295,11 +323,12 @@ export async function runUniversalContentPipeline(
 
   return {
     executionPlan: [
-      'Analyze niche and audience intent',
-      'Lock brand identity and rules',
-      'Generate hook, script, scenes, and prompts',
-      'Generate optional voice/music and build mix plan',
-      'Optimize output per platform and run quality control',
+      'Analyze niche, audience intent, tone, and style signals',
+      'Lock brand identity, character continuity, and execution rules',
+      'Generate hook, script, story beats, and directed scenes',
+      'Build cinematic image/video prompts and select fallback-ready generation routes',
+      'Generate voice, music, sound-design timing, and a voice-forward mix plan when requested',
+      'Optimize final packages per platform and run quality control before delivery',
     ],
     brandProfile,
     identity,
@@ -307,7 +336,7 @@ export async function runUniversalContentPipeline(
     structure,
     content: {
       hook: amplifiedHook.hook,
-      script: generated.text,
+      script: finalScript,
       variations: generated.variations,
       hashtags: generated.hashtags,
     },

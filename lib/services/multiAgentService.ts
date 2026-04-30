@@ -121,15 +121,18 @@ export interface OrchestrationPlan {
 }
 
 // Default Agent Templates
+const DEFAULT_AGENT_TEMPLATE_VERSION = 2;
 const DEFAULT_AGENTS: Omit<AgentConfig, 'id' | 'taskHistory' | 'createdAt' | 'updatedAt'>[] = [
   {
     name: 'PlannerAgent',
     role: 'planner',
     capabilities: ['execution_planning'],
-    promptTemplate: `You are the Planner Agent in a multi-agent orchestration system.
+    promptTemplate: `You are the Planner Agent in a multi-agent production system.
 
 Role:
-- Interpret the user request and define an execution plan.
+- Interpret the user request as a production brief.
+- Decide whether this is text-only, media-led, or full multi-modal execution.
+- Define the execution order across identity, rules, structure, generation, visual direction, distribution, and quality control.
 - Do not generate final content.
 
 Input: {{input}}
@@ -140,11 +143,12 @@ Output format (strict):
 - Content type
 - Number of assets
 - Target formats/platforms
-- Required downstream agents in order`,
+- Required downstream agents in order
+- Key production risks or fallback needs`,
     scoringWeights: { creativity: 0.1, relevance: 0.5, engagement: 0.1, brandAlignment: 0.3 },
     performanceScore: 80,
     evolutionState: 'active',
-    version: 1,
+    version: DEFAULT_AGENT_TEMPLATE_VERSION,
   },
   {
     name: 'IdentityAgent',
@@ -153,10 +157,11 @@ Output format (strict):
     promptTemplate: `You are the Identity Agent.
 
 Role:
-- Build a consistent identity from niche and goals.
-- Storytelling niche: define character + world constraints.
-- Personal brand niche: define persona + voice.
-- Business niche: define authority identity.
+- Build the reusable identity layer for the request.
+- Storytelling niche: define protagonist, visual lock, and world constraints.
+- Personal brand niche: define persona, voice, and authority posture.
+- Business niche: define positioning, trust posture, and audience promise.
+- Keep the identity stable enough for text, image, video, and voice outputs.
 
 User Input: {{input}}
 Execution Plan: {{executionPlan}}
@@ -167,7 +172,7 @@ Return only the identity definition that downstream agents can reuse.`,
     scoringWeights: { creativity: 0.2, relevance: 0.4, engagement: 0.1, brandAlignment: 0.3 },
     performanceScore: 80,
     evolutionState: 'active',
-    version: 1,
+    version: DEFAULT_AGENT_TEMPLATE_VERSION,
   },
   {
     name: 'RulesAgent',
@@ -177,7 +182,8 @@ Return only the identity definition that downstream agents can reuse.`,
 
 Role:
 - Generate strict niche-specific rules that control all downstream outputs.
-- Include style rules, constraints, avoid-list, and tone enforcement.
+- Include tone, style, platform behavior, continuity rules, avoid-list, and quality constraints.
+- Make the rules strong enough to reject generic output before it reaches the user.
 
 User Input: {{input}}
 Execution Plan: {{executionPlan}}
@@ -188,7 +194,7 @@ Return an explicit rule set. No content generation.`,
     scoringWeights: { creativity: 0.15, relevance: 0.45, engagement: 0.1, brandAlignment: 0.3 },
     performanceScore: 80,
     evolutionState: 'active',
-    version: 1,
+    version: DEFAULT_AGENT_TEMPLATE_VERSION,
   },
   {
     name: 'StructureAgent',
@@ -197,10 +203,11 @@ Return an explicit rule set. No content generation.`,
     promptTemplate: `You are the Structure Agent.
 
 Role:
-- Define reusable structure for this request.
-- Story: scene progression.
-- Short-form: Hook -> Retention -> Loop.
-- Educational: Hook -> Value -> Takeaway.
+- Define the production structure for this request.
+- Story: hook -> scene beats -> escalation -> cliffhanger loop.
+- Short-form: Hook -> Build-Up -> Payoff -> End Hook.
+- Educational: Hook -> Value -> Takeaway -> CTA.
+- Business: Hook -> Proof -> Offer -> CTA.
 
 User Input: {{input}}
 Execution Plan: {{executionPlan}}
@@ -211,7 +218,7 @@ Return only the structure blueprint.`,
     scoringWeights: { creativity: 0.15, relevance: 0.5, engagement: 0.15, brandAlignment: 0.2 },
     performanceScore: 80,
     evolutionState: 'active',
-    version: 1,
+    version: DEFAULT_AGENT_TEMPLATE_VERSION,
   },
   {
     name: 'ContentGeneratorAgent',
@@ -220,11 +227,11 @@ Return only the structure blueprint.`,
     promptTemplate: `You are the Content Generator Agent.
 
 Role:
-- Produce core content from identity + rules + structure.
-- No generic writing.
-- No filler.
-- Follow structure strictly.
-- Optimize for engagement and retention.
+- Produce the core deliverable from identity + rules + structure.
+- Write like a creative director delivering finished work, not a chatbot explaining possibilities.
+- No generic writing. No filler. No soft openings.
+- Follow structure strictly and keep the first 3 seconds strong.
+- Optimize for engagement, retention, emotional clarity, and loop potential.
 
 User Input: {{input}}
 Execution Plan: {{executionPlan}}
@@ -237,7 +244,7 @@ Return production-ready core content only.`,
     scoringWeights: { creativity: 0.25, relevance: 0.3, engagement: 0.3, brandAlignment: 0.15 },
     performanceScore: 80,
     evolutionState: 'active',
-    version: 1,
+    version: DEFAULT_AGENT_TEMPLATE_VERSION,
   },
   {
     name: 'DistributionAgent',
@@ -246,10 +253,10 @@ Return production-ready core content only.`,
     promptTemplate: `You are the Caption & Distribution Agent.
 
 Role:
-- Convert content into platform-ready post variants.
-- Caption format: Hook -> Statement -> Question.
-- Add optimized hashtags and posting format notes.
-- Avoid repetition and weak hooks.
+- Convert the core content into platform-ready cuts.
+- Preserve the strongest hook while adapting pacing, CTA, and packaging per platform.
+- Add optimized hashtags and posting-format notes only when useful.
+- Avoid repetition, weak hooks, and generic filler.
 
 Core Content: {{content}}
 Rules: {{rules}}
@@ -260,7 +267,7 @@ Return caption and distribution package.`,
     scoringWeights: { creativity: 0.2, relevance: 0.35, engagement: 0.35, brandAlignment: 0.1 },
     performanceScore: 80,
     evolutionState: 'active',
-    version: 1,
+    version: DEFAULT_AGENT_TEMPLATE_VERSION,
   },
   {
     name: 'MemoryAgent',
@@ -269,8 +276,9 @@ Return caption and distribution package.`,
     promptTemplate: `You are the Memory Agent.
 
 Role:
-- Extract memory-critical context to preserve continuity.
-- Prevent repetition and keep identity consistency.
+- Extract only continuity-critical context for later reuse.
+- Preserve brand identity, character lock, tone rules, and anti-repetition signals.
+- Prefer concise, reusable memory notes over verbose summaries.
 
 User Input: {{input}}
 Identity: {{identity}}
@@ -281,7 +289,7 @@ Return concise memory notes for reuse.`,
     scoringWeights: { creativity: 0.05, relevance: 0.45, engagement: 0.05, brandAlignment: 0.45 },
     performanceScore: 78,
     evolutionState: 'active',
-    version: 1,
+    version: DEFAULT_AGENT_TEMPLATE_VERSION,
   },
   {
     name: 'TrendAgent',
@@ -290,8 +298,9 @@ Return concise memory notes for reuse.`,
     promptTemplate: `You are the Trend Agent.
 
 Role:
-- Inject viral optimization while preserving niche consistency.
-- Improve hooks, pacing, and packaging for current platform behavior.
+- Inject platform-native optimization without diluting the niche.
+- Improve hooks, pacing, pattern interrupts, and packaging for current consumption behavior.
+- Keep the output feeling intentional, not trend-chasing for its own sake.
 
 Core Content: {{content}}
 Execution Plan: {{executionPlan}}
@@ -301,7 +310,7 @@ Return trend adjustments only.`,
     scoringWeights: { creativity: 0.15, relevance: 0.3, engagement: 0.45, brandAlignment: 0.1 },
     performanceScore: 78,
     evolutionState: 'active',
-    version: 1,
+    version: DEFAULT_AGENT_TEMPLATE_VERSION,
   },
   {
     name: 'HookMaster',
@@ -311,9 +320,10 @@ Return trend adjustments only.`,
 
 Rules:
 - First line MUST stop the scroll
-- Use curiosity gaps, bold claims, or emotional triggers
+- Use curiosity gaps, bold claims, tension, or emotional triggers
 - Maximum 15 words for the hook
 - Never start with "I" or generic phrases
+- The hook must feel native to the niche, not templated
 
 Input: {{input}}
 Brand Context: {{brandContext}}
@@ -322,7 +332,7 @@ Generate 3 different hooks, ranked by expected engagement.`,
     scoringWeights: { creativity: 0.3, relevance: 0.2, engagement: 0.4, brandAlignment: 0.1 },
     performanceScore: 75,
     evolutionState: 'active',
-    version: 1,
+    version: DEFAULT_AGENT_TEMPLATE_VERSION,
   },
   {
     name: 'ContentWriter',
@@ -331,10 +341,11 @@ Generate 3 different hooks, ranked by expected engagement.`,
     promptTemplate: `You are an expert content writer specializing in social media.
 
 Rules:
-- Write engaging, conversational content
-- Use short paragraphs and line breaks
-- Include a clear call-to-action
+- Write engaging, conversational content with sharp phrasing
+- Use short paragraphs and line breaks when they improve pacing
 - Match the brand voice exactly
+- Keep the body strong enough to support video voiceover or caption use
+- Do not waste words explaining the obvious
 
 Input: {{input}}
 Hook to expand: {{hook}}
@@ -344,7 +355,7 @@ Write the full post body (without the hook).`,
     scoringWeights: { creativity: 0.25, relevance: 0.3, engagement: 0.25, brandAlignment: 0.2 },
     performanceScore: 75,
     evolutionState: 'active',
-    version: 1,
+    version: DEFAULT_AGENT_TEMPLATE_VERSION,
   },
   {
     name: 'StrategyAdvisor',
@@ -353,10 +364,10 @@ Write the full post body (without the hook).`,
     promptTemplate: `You are a social media strategy expert.
 
 Your job is to:
-- Analyze the content direction
-- Suggest optimal posting time
-- Recommend content format
-- Predict engagement potential
+- Analyze the content direction and platform fit
+- Suggest optimal format, posting posture, and sequencing
+- Predict engagement potential and friction points
+- Recommend the best next move, not a generic checklist
 
 Input: {{input}}
 Brand Context: {{brandContext}}
@@ -366,7 +377,7 @@ Provide strategic recommendations.`,
     scoringWeights: { creativity: 0.1, relevance: 0.4, engagement: 0.3, brandAlignment: 0.2 },
     performanceScore: 75,
     evolutionState: 'active',
-    version: 1,
+    version: DEFAULT_AGENT_TEMPLATE_VERSION,
   },
   {
     name: 'QualityCritic',
@@ -375,11 +386,11 @@ Provide strategic recommendations.`,
     promptTemplate: `You are a harsh but fair content critic.
 
 Your job is to:
-- Identify weaknesses in the content
-- Check for generic/robotic language
-- Verify brand alignment
+- Identify weak hooks, generic language, broken continuity, and weak emotional delivery
+- Check that the content feels produced, not drafted
+- Verify brand alignment and platform fit
 - Score the content quality
-- Suggest specific improvements
+- Suggest specific improvements only when needed
 
 Content to review: {{content}}
 Brand Context: {{brandContext}}
@@ -394,7 +405,7 @@ Reject average/generic output. Only approve if it is publish-ready.`,
     scoringWeights: { creativity: 0.2, relevance: 0.3, engagement: 0.2, brandAlignment: 0.3 },
     performanceScore: 75,
     evolutionState: 'active',
-    version: 1,
+    version: DEFAULT_AGENT_TEMPLATE_VERSION,
   },
   {
     name: 'ContentOptimizer',
@@ -403,10 +414,10 @@ Reject average/generic output. Only approve if it is publish-ready.`,
     promptTemplate: `You are a content optimization specialist.
 
 Your job is to:
-- Improve readability
-- Enhance emotional impact
-- Optimize for platform algorithms
-- Strengthen the call-to-action
+- Improve readability without flattening the voice
+- Enhance emotional impact, specificity, and retention
+- Optimize for platform behavior without sounding algorithmic
+- Strengthen the CTA or end hook when needed
 
 Original content: {{content}}
 Critique feedback: {{critique}}
@@ -416,7 +427,7 @@ Rewrite the content with improvements.`,
     scoringWeights: { creativity: 0.2, relevance: 0.25, engagement: 0.35, brandAlignment: 0.2 },
     performanceScore: 75,
     evolutionState: 'active',
-    version: 1,
+    version: DEFAULT_AGENT_TEMPLATE_VERSION,
   },
   {
     name: 'VisualDirector',
@@ -425,8 +436,9 @@ Rewrite the content with improvements.`,
     promptTemplate: `You are a visual direction specialist for AI media generation.
 
 Your job is to turn the request into a production-grade {{format}} brief.
-- Focus on concrete subjects, framing, lighting, mood, composition, and style.
-- For video, include motion, camera movement, and scene continuity.
+- Focus on concrete subjects, framing, lighting, realism, composition, and style.
+- For video, include motion, camera logic, pacing, and scene continuity.
+- Maintain character lock and brand identity when context provides them.
 - Output must target a final generated asset, not a concept note.
 
 Input: {{input}}
@@ -437,7 +449,7 @@ Provide a direct media-generation brief.`,
     scoringWeights: { creativity: 0.3, relevance: 0.3, engagement: 0.2, brandAlignment: 0.2 },
     performanceScore: 75,
     evolutionState: 'active',
-    version: 1,
+    version: DEFAULT_AGENT_TEMPLATE_VERSION,
   },
   {
     name: 'HashtagResearcher',
@@ -459,7 +471,7 @@ Provide 10-15 optimized hashtags with reasoning.`,
     scoringWeights: { creativity: 0.1, relevance: 0.4, engagement: 0.4, brandAlignment: 0.1 },
     performanceScore: 75,
     evolutionState: 'active',
-    version: 1,
+    version: DEFAULT_AGENT_TEMPLATE_VERSION,
   },
   {
     name: 'EngagementPredictor',
@@ -481,7 +493,7 @@ Provide detailed predictions with confidence levels.`,
     scoringWeights: { creativity: 0.05, relevance: 0.35, engagement: 0.5, brandAlignment: 0.1 },
     performanceScore: 75,
     evolutionState: 'active',
-    version: 1,
+    version: DEFAULT_AGENT_TEMPLATE_VERSION,
   },
 ];
 
@@ -540,6 +552,59 @@ const VALID_EVOLUTION_STATES: ReadonlySet<AgentConfig['evolutionState']> = new S
   'deprecated',
   'hybrid',
 ]);
+
+function syncDefaultAgentTemplate(agent: AgentConfig, template: typeof DEFAULT_AGENTS[number]): AgentConfig {
+  if (agent.version >= template.version) {
+    return agent;
+  }
+
+  return {
+    ...agent,
+    name: template.name,
+    capabilities: template.capabilities,
+    promptTemplate: template.promptTemplate,
+    scoringWeights: template.scoringWeights,
+    version: template.version,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function applyDefaultAgentTemplateUpgrades(agents: AgentConfig[]): { agents: AgentConfig[]; changed: boolean } {
+  let changed = false;
+
+  const upgradedAgents = agents.map((agent) => {
+    const template = DEFAULT_AGENTS.find((entry) => entry.role === agent.role);
+    if (!template) {
+      return agent;
+    }
+
+    const isSystemTemplateAgent = agent.name === template.name && !agent.parentAgents?.length;
+    if (!isSystemTemplateAgent) {
+      return agent;
+    }
+
+    const upgraded = syncDefaultAgentTemplate(agent, template);
+    if (upgraded !== agent) {
+      changed = true;
+    }
+    return upgraded;
+  });
+
+  return { agents: upgradedAgents, changed };
+}
+
+function fillPromptTemplate(template: string, input: string, context: Record<string, string>): string {
+  let prompt = template.split('{{input}}').join(input);
+
+  for (const [key, value] of Object.entries(context)) {
+    prompt = prompt.split(`{{${key}}}`).join(value);
+  }
+
+  return prompt
+    .replace(/\{\{[a-zA-Z0-9_]+\}\}/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
 
 function normalizeAgentConfig(raw: Partial<AgentConfig>): AgentConfig | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -605,7 +670,10 @@ function normalizeAgentConfig(raw: Partial<AgentConfig>): AgentConfig | null {
         : template?.performanceScore ?? 75,
     taskHistory: Array.isArray(raw.taskHistory) ? raw.taskHistory : [],
     evolutionState,
-    version: typeof raw.version === 'number' && raw.version > 0 ? Math.floor(raw.version) : 1,
+    version:
+      typeof raw.version === 'number' && raw.version > 0
+        ? Math.floor(raw.version)
+        : template?.version || DEFAULT_AGENT_TEMPLATE_VERSION,
     parentAgents: Array.isArray(raw.parentAgents) ? raw.parentAgents.filter((id) => typeof id === 'string') : undefined,
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : now,
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : now,
@@ -662,12 +730,13 @@ export async function loadAgents(): Promise<AgentConfig[]> {
     const normalized = parsed
       .map((entry) => normalizeAgentConfig(entry as Partial<AgentConfig>))
       .filter((entry): entry is AgentConfig => !!entry);
+    const { agents: upgraded, changed } = applyDefaultAgentTemplateUpgrades(normalized);
 
-    if (JSON.stringify(parsed) !== JSON.stringify(normalized)) {
-      await saveAgents(normalized);
+    if (JSON.stringify(parsed) !== JSON.stringify(upgraded) || changed) {
+      await saveAgents(upgraded);
     }
 
-    return normalized;
+    return upgraded;
   } catch {
     return [];
   }
@@ -899,11 +968,7 @@ export async function executeAgentTask(
   const startTime = Date.now();
   
   // Build prompt from template
-  let prompt = agent.promptTemplate;
-  prompt = prompt.replace('{{input}}', input);
-  for (const [key, value] of Object.entries(context)) {
-    prompt = prompt.replace(`{{${key}}}`, value);
-  }
+  const prompt = fillPromptTemplate(agent.promptTemplate, input, context);
   const reasoningPrompt = `${prompt}\n\n${DEEP_REASONING_DIRECTIVE}`;
   
   try {
