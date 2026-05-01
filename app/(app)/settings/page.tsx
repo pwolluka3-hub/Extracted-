@@ -157,7 +157,7 @@ export default function SettingsPage() {
     leonardoKey: '',
     ideogramKey: '',
     falKey: '',
-    ltxEndpoint: 'fal-ai/ltx-video-v2.3',
+    ltxEndpoint: 'fal-ai/ltx-2.3/text-to-video/fast',
     ltxOpenEndpoint: '',
   });
   const [saving, setSaving] = useState(false);
@@ -258,7 +258,7 @@ export default function SettingsPage() {
           leonardoKey: leonardoKey || '',
           ideogramKey: ideogramKey || '',
           falKey: falKey || '',
-          ltxEndpoint: ltxEndpoint || 'fal-ai/ltx-video-v2.3',
+          ltxEndpoint: ltxEndpoint || 'fal-ai/ltx-2.3/text-to-video/fast',
           ltxOpenEndpoint: ltxOpenEndpoint || '',
         });
       } catch (error) {
@@ -1065,7 +1065,7 @@ export default function SettingsPage() {
                     type="text"
                     value={settings.ltxEndpoint}
                     onChange={(e) => setSettings(prev => ({ ...prev, ltxEndpoint: e.target.value }))}
-                    placeholder="fal-ai/ltx-video-v2.3"
+                    placeholder="fal-ai/ltx-2.3/text-to-video/fast"
                     className="w-full px-3 py-2 text-sm rounded-lg bg-background/50 border border-border focus:border-nexus-cyan outline-none"
                   />
                 </div>
@@ -1082,7 +1082,7 @@ export default function SettingsPage() {
                 </div>
               </div>
               <p className="text-xs text-muted-foreground mt-3">
-                Use a Fal-style endpoint slug such as <code>fal-ai/ltx-video-v2.3</code> for cloud, or point the open endpoint at a reachable LTX 2.3 server URL.
+                Use a Fal-style endpoint slug such as <code>fal-ai/ltx-2.3/text-to-video/fast</code> for cloud, or point the open endpoint at a reachable LTX 2.3 server URL.
               </p>
             </GlassCard>
           </div>

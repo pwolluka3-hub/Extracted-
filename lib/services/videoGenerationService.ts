@@ -30,12 +30,22 @@ export interface GeneratedVideo {
 
 const MAX_RETRIES = 0;
 const RETRY_DELAY = 1500;
-const DEFAULT_LTX_MODEL = 'fal-ai/ltx-video-v2.3';
+export const DEFAULT_LTX_MODEL = 'fal-ai/ltx-2.3/text-to-video/fast';
 const LTX_PROVIDER_TIMEOUT_MS = 240_000;
 const LTX_POLL_INTERVAL_MS = 2500;
+const LTX_STANDARD_DURATIONS = [6, 8, 10] as const;
+const LTX_FAST_DURATIONS = [6, 8, 10, 12, 14, 16, 18, 20] as const;
 
 function normalizeConfiguredValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+export function normalizeLtxEndpointSlug(endpoint: string): string {
+  const normalized = normalizeConfiguredValue(endpoint);
+  if (!normalized || normalized === 'fal-ai/ltx-video-v2.3') {
+    return DEFAULT_LTX_MODEL;
+  }
+  return normalized;
 }
 
 export function isLoopbackHost(hostname: string): boolean {
@@ -145,6 +155,22 @@ interface VideoPayloadShape {
   thumbnail_url?: unknown;
 }
 
+function nearestAllowedDuration(durationSeconds: number, allowed: readonly number[]): number {
+  return allowed.reduce((best, candidate) =>
+    Math.abs(candidate - durationSeconds) < Math.abs(best - durationSeconds) ? candidate : best
+  );
+}
+
+export function normalizeLtxAspectRatio(aspectRatio: VideoGenerationOptions['aspectRatio'] = '16:9'): '16:9' | '9:16' {
+  return aspectRatio === '16:9' ? '16:9' : '9:16';
+}
+
+export function normalizeLtxDuration(durationSeconds = 8, endpoint = DEFAULT_LTX_MODEL): number {
+  const rounded = Math.round(Number.isFinite(durationSeconds) ? durationSeconds : 8);
+  const allowed = endpoint.includes('/fast') ? LTX_FAST_DURATIONS : LTX_STANDARD_DURATIONS;
+  return nearestAllowedDuration(Math.min(Math.max(rounded, allowed[0]), allowed[allowed.length - 1]), allowed);
+}
+
 function buildEnhancedVideoPrompt(options: VideoGenerationOptions): string {
   const {
     prompt,
@@ -211,6 +237,30 @@ function buildEnhancedVideoNegativePrompt(options: VideoGenerationOptions): stri
   ]
     .filter(Boolean)
     .join(', ');
+}
+
+export function buildLtxRequestPayload(
+  options: VideoGenerationOptions,
+  endpoint = DEFAULT_LTX_MODEL
+): Record<string, unknown> {
+  const prompt = buildEnhancedVideoPrompt(options);
+  const negativePrompt = buildEnhancedVideoNegativePrompt(options);
+  const normalizedAspectRatio = normalizeLtxAspectRatio(options.aspectRatio);
+  const normalizedDuration = normalizeLtxDuration(options.durationSeconds, endpoint);
+  const qualityProfile = options.qualityProfile || 'cinematic';
+
+  return {
+    prompt: negativePrompt
+      ? `${prompt} Avoid: ${negativePrompt}.`
+      : prompt,
+    aspect_ratio: normalizedAspectRatio,
+    duration: normalizedDuration,
+    resolution: qualityProfile === 'netflix' ? '1080p' : '720p',
+    fps: 24,
+    generate_audio: true,
+    ...(typeof options.seed === 'number' ? { seed: options.seed } : {}),
+    ...(options.imageUrl ? { image_url: options.imageUrl } : {}),
+  };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -317,8 +367,29 @@ function extractVideoPayload(data: VideoPayloadShape | null | undefined): Genera
   };
 }
 
-async function pollFalJob(statusUrl: string, apiKey: string): Promise<GeneratedVideo> {
+async function fetchFalResult(resultUrl: string, apiKey: string): Promise<GeneratedVideo> {
+  const response = await safeFetch(resultUrl, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Key ${apiKey}`,
+    },
+  }, 30000);
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`LTX result fetch failed (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json();
+  const parsed = extractVideoPayload(data);
+  if (parsed) return parsed;
+
+  throw new Error('LTX provider completed but did not return a playable video URL');
+}
+
+async function pollFalJob(statusUrl: string, apiKey: string, responseUrl?: string): Promise<GeneratedVideo> {
   const startedAt = Date.now();
+  let resultUrl = responseUrl;
   while (Date.now() - startedAt < LTX_PROVIDER_TIMEOUT_MS) {
     await sleep(LTX_POLL_INTERVAL_MS);
 
@@ -335,11 +406,19 @@ async function pollFalJob(statusUrl: string, apiKey: string): Promise<GeneratedV
     }
 
     const data = await response.json();
+    const immediateResult = extractVideoPayload(data);
+    if (immediateResult) return immediateResult;
+
     const status = String(data?.status || data?.state || '').toUpperCase();
+    resultUrl =
+      resultUrl ||
+      (typeof data?.response_url === 'string' ? data.response_url : undefined) ||
+      (typeof data?.responseUrl === 'string' ? data.responseUrl : undefined);
 
     if (status.includes('COMPLETED') || status.includes('SUCCESS')) {
       const parsed = extractVideoPayload(data);
       if (parsed) return parsed;
+      if (resultUrl) return fetchFalResult(resultUrl, apiKey);
     }
 
     if (status.includes('FAILED') || status.includes('ERROR')) {
@@ -357,19 +436,9 @@ async function generateWithLtx23(options: VideoGenerationOptions): Promise<Gener
   }
 
   const configuredEndpoint = await kvGet('ltx_endpoint') || process.env.NEXT_PUBLIC_LTX_ENDPOINT;
-  const endpoint = normalizeFalEndpoint(configuredEndpoint || DEFAULT_LTX_MODEL);
-  const {
-    aspectRatio = '16:9',
-    durationSeconds = 8,
-    seed,
-    imageUrl,
-    cameraAngle,
-    cameraMotion,
-    shotStyle,
-    qualityProfile = 'cinematic',
-  } = options;
-  const prompt = buildEnhancedVideoPrompt(options);
-  const negativePrompt = buildEnhancedVideoNegativePrompt(options);
+  const rawEndpoint = normalizeLtxEndpointSlug(configuredEndpoint || DEFAULT_LTX_MODEL);
+  const endpoint = normalizeFalEndpoint(rawEndpoint);
+  const requestPayload = buildLtxRequestPayload(options, rawEndpoint);
 
   return withRetry(async () => {
     const response = await safeFetch(endpoint, {
@@ -378,18 +447,7 @@ async function generateWithLtx23(options: VideoGenerationOptions): Promise<Gener
         'Content-Type': 'application/json',
         'Authorization': `Key ${apiKey}`,
       },
-      body: JSON.stringify({
-        prompt,
-        negative_prompt: negativePrompt,
-        aspect_ratio: aspectRatio,
-        duration: durationSeconds,
-        seed,
-        image_url: imageUrl,
-        camera_angle: cameraAngle,
-        camera_motion: cameraMotion,
-        shot_style: shotStyle,
-        quality_profile: qualityProfile,
-      }),
+      body: JSON.stringify(requestPayload),
     });
 
     if (!response.ok) {
@@ -406,9 +464,18 @@ async function generateWithLtx23(options: VideoGenerationOptions): Promise<Gener
       data?.response_url ||
       data?.statusUrl ||
       data?.urls?.get;
+    const responseUrl =
+      data?.response_url ||
+      data?.responseUrl ||
+      data?.urls?.result ||
+      data?.urls?.response;
 
     if (statusUrl) {
-      return pollFalJob(statusUrl, apiKey);
+      return pollFalJob(statusUrl, apiKey, responseUrl);
+    }
+
+    if (responseUrl) {
+      return fetchFalResult(responseUrl, apiKey);
     }
 
     throw new Error('LTX provider did not return a playable video URL');

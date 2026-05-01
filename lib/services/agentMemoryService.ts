@@ -73,6 +73,18 @@ export interface MemoryExtraction {
   userFacts?: Array<{ key: string; value: string }>;
 }
 
+export interface StructuredBrandIdentityMemory {
+  brandName?: string;
+  niche?: string;
+  characterName?: string;
+  characterProfile?: string;
+  contentPillars?: string[];
+  avoidTopics?: string[];
+  contentThemes?: string[];
+  episodeStructure?: string;
+  raw?: string;
+}
+
 const MEMORY_PATH = `${PATHS.system}/agent_memory.json`;
 
 function dedupeStrings(values: string[], lowercase = false): string[] {
@@ -335,6 +347,56 @@ export async function addUserFact(key: string, value: string, source: string = '
   return saveAgentMemory(memory);
 }
 
+export async function saveStructuredBrandIdentity(identity: StructuredBrandIdentityMemory): Promise<boolean> {
+  const memory = await loadAgentMemory();
+
+  if (identity.niche?.trim()) {
+    const niche = identity.niche.trim();
+    memory.niche = niche;
+    memory.nicheDetails = dedupeStrings([niche, ...memory.nicheDetails]).slice(0, 30);
+  }
+
+  if (identity.contentPillars?.length) {
+    memory.contentPillars = dedupeStrings([...memory.contentPillars, ...identity.contentPillars]).slice(-30);
+  }
+
+  if (identity.contentThemes?.length) {
+    memory.contentThemes = dedupeStrings([...memory.contentThemes, ...identity.contentThemes]).slice(-40);
+  }
+
+  if (identity.avoidTopics?.length) {
+    memory.avoidTopics = dedupeStrings([...memory.avoidTopics, ...identity.avoidTopics]).slice(-40);
+  }
+
+  const facts: Array<{ key: string; value?: string }> = [
+    { key: 'brand_name', value: identity.brandName },
+    { key: 'locked_character_name', value: identity.characterName },
+    { key: 'locked_character_profile', value: identity.characterProfile },
+    { key: 'episode_structure', value: identity.episodeStructure },
+    { key: 'brand_identity_raw', value: identity.raw },
+  ];
+
+  for (const factInput of facts) {
+    const value = factInput.value?.trim();
+    if (!value) continue;
+    const fact: UserFact = {
+      key: factInput.key,
+      value,
+      confidence: 1,
+      source: 'user_stated',
+      createdAt: new Date().toISOString(),
+    };
+    const existingIndex = memory.userFacts.findIndex((item) => item.key === fact.key);
+    if (existingIndex >= 0) {
+      memory.userFacts[existingIndex] = fact;
+    } else {
+      memory.userFacts.push(fact);
+    }
+  }
+
+  return saveAgentMemory(memory);
+}
+
 // Add niche detail
 export async function addNicheDetail(detail: string): Promise<boolean> {
   const memory = await loadAgentMemory();
@@ -402,6 +464,11 @@ export async function buildMemoryContext(): Promise<string> {
   if (memory.targetPlatforms.length > 0) {
     lockedProfile.push(`Target platforms: ${memory.targetPlatforms.join(', ')}`);
     sections.push(`TARGET PLATFORMS: ${memory.targetPlatforms.join(', ')}`);
+  }
+  const lockedCharacterName = memory.userFacts.find(fact => fact.key === 'locked_character_name')?.value;
+  const lockedCharacterProfile = memory.userFacts.find(fact => fact.key === 'locked_character_profile')?.value;
+  if (lockedCharacterName || lockedCharacterProfile) {
+    lockedProfile.push(`Locked character: ${lockedCharacterName || lockedCharacterProfile}`);
   }
   if (memory.monetizationGoals.length > 0) {
     lockedProfile.push(`Monetization goals: ${memory.monetizationGoals.join(', ')}`);

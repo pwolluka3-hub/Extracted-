@@ -19,7 +19,9 @@ import {
   syncWithBrandKit,
   extractMemoryFromResponse,
   extractStructuredMemory,
+  saveStructuredBrandIdentity,
 } from '@/lib/services/agentMemoryService';
+import { parseStructuredBrandIdentity, type ParsedStructuredBrandIdentity } from '@/lib/context/brandIdentityParser';
 import { buildSystemPrompt, INTENT_DETECTION_PROMPT, FILE_ANALYSIS_PROMPT } from '@/lib/constants/prompts';
 import { runGodModeAnalysis, quickIdeate, callCustomProvider, type GodModeResult } from '@/lib/services/godModeEngine';
 import { analyzeMusicMood, generateBackgroundMusic, getBrowserMusicGenerator, type MusicMood } from '@/lib/services/musicEngine';
@@ -109,7 +111,7 @@ const PAGE_BLOCK_PATTERN = /\[Page \d+\][\s\S]*?(?=\n\n\[Page \d+\]|$)/g;
 const NICHE_CLARIFICATION_PATTERN = /\bwhat niche should i lock before generating\??\b/i;
 const REWRITE_REQUEST_PATTERN = /\b(rewrite|regenerate|redo|rework|fix|improve)\b.*\b(script|scene|story|version|this)\b/i;
 const SCHEDULE_REQUEST_PATTERN = /\b(schedule|queue|plan|slot)\b[\s\S]{0,40}\b(post|content|draft|caption|script|scene|reel|video|image|this|it|scheduler|calendar|later)\b/i;
-const ADMIN_ASSISTANT_MESSAGE_PATTERN = /^(command mode:|locked niche set to:|idea queued in memory:|target platforms updated:|background automation|automation:|engagement sync complete|done\.\s+i scheduled it in your built-in scheduler|process update:)/i;
+const ADMIN_ASSISTANT_MESSAGE_PATTERN = /^(command mode:|locked niche set to:|idea queued in memory:|target platforms updated:|background automation|automation:|engagement sync complete|done\.\s+i scheduled it in your built-in scheduler|process update:|quick update:)/i;
 const CAPABILITIES_REQUEST_PATTERN = /\b(what can you do|what do you do|your capabilities|capabilities|what are you capable of|help me understand what you can do)\b/i;
 const PLANNING_VISIBILITY_PATTERN = /\b(what(?:'s| is)?\s+(?:it\s+)?planning|show\s+(?:me\s+)?(?:the\s+)?(?:plan|queue|schedule|scheduled|upcoming)|what(?:'s| is)\s+scheduled|automation\s+status|queue\s+status|planner\s+status)\b/i;
 const DELETE_ACTION_PATTERN = /\b(delete|remove|cancel|unschedule)\b[\s\S]{0,24}\b(it|this|that|latest|last|schedule|scheduled|queue|queued|plan)\b/i;
@@ -554,9 +556,9 @@ function buildFileContextPreview(text: string): string {
 
 function buildGreetingReply(): string {
   const options = [
-    'Hey. Good to see you. What are we working on right now?',
-    'Hi. I am here. Want to plan, generate, or review something?',
-    'Hey there. Ready when you are. What do you want to ship first?',
+    'Hey. I am here. What are we moving forward right now?',
+    'I am here. Send me the next piece and I will keep it tight.',
+    'Hey. What should I generate, fix, or check first?',
   ];
   const index = Math.abs(Date.now()) % options.length;
   return options[index];
@@ -582,8 +584,29 @@ function wantsBulkScheduleExecution(message: string): boolean {
   return BULK_SCHEDULE_EXECUTION_PATTERN.test(message.trim().toLowerCase());
 }
 
+function isBulkScheduleQuestionOnly(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) return false;
+  if (/\b(just|only)\s+(?:a\s+)?question\b/.test(normalized)) return true;
+  if (/\b(?:do not|don't|dont)\s+(?:run|start|execute|import|queue|schedule)\b/.test(normalized)) return true;
+  return (
+    /\?/.test(normalized) &&
+    /^(?:can|could|would|will|do|does|is|are|what|how)\b/.test(normalized)
+  );
+}
+
 function wantsMemoryRecall(message: string): boolean {
   return MEMORY_RECALL_PATTERN.test(message.trim().toLowerCase());
+}
+
+function findMemoryFact(memory: Awaited<ReturnType<typeof loadAgentMemory>>, key: string): string {
+  return memory.userFacts.find((fact) => fact.key === key)?.value || '';
+}
+
+function compactList(items: string[], limit = 5): string {
+  const normalized = items.map((item) => item.trim()).filter(Boolean).slice(0, limit);
+  if (normalized.length === 0) return 'none saved yet';
+  return normalized.join(' | ');
 }
 
 function buildMemoryRecallReply(
@@ -594,7 +617,10 @@ function buildMemoryRecallReply(
   const lockedAudience = memory.targetAudience || brandKit?.targetAudience || 'not set';
   const lockedTone = memory.preferredTone || brandKit?.tone || 'not set';
   const lockedPlatforms = memory.targetPlatforms.length > 0 ? memory.targetPlatforms.join(', ') : 'not set';
-  const brandName = memory.userFacts.find((fact) => fact.key === 'brand_name')?.value || brandKit?.brandName || 'not set';
+  const brandName = findMemoryFact(memory, 'brand_name') || brandKit?.brandName || 'not set';
+  const characterName = findMemoryFact(memory, 'locked_character_name');
+  const characterProfile = findMemoryFact(memory, 'locked_character_profile');
+  const episodeStructure = findMemoryFact(memory, 'episode_structure');
   const topIdeas = memory.contentIdeas
     .filter((idea) => idea.status === 'new')
     .slice(-3)
@@ -602,17 +628,36 @@ function buildMemoryRecallReply(
   const topDetails = memory.nicheDetails.slice(-3);
 
   return [
-    'Here is what I currently have locked:',
+    'Here is what I have locked right now:',
     `- Brand: ${brandName}`,
     `- Niche: ${lockedNiche}`,
+    `- Character lock: ${characterName || characterProfile || 'not set'}`,
     `- Target audience: ${lockedAudience}`,
     `- Tone: ${lockedTone}`,
     `- Platforms: ${lockedPlatforms}`,
+    `- Content pillars: ${compactList(memory.contentPillars)}`,
+    `- Avoid topics: ${compactList(memory.avoidTopics)}`,
+    `- Episode structure: ${episodeStructure || 'not set'}`,
     `- Key details: ${topDetails.length > 0 ? topDetails.join(' | ') : 'none saved yet'}`,
     `- Saved ideas: ${topIdeas.length > 0 ? topIdeas.join(' | ') : 'none saved yet'}`,
     '',
-    'If any of this is wrong, send the correction and I will overwrite it immediately.',
+    'Send a correction and I will overwrite the locked memory.',
   ].join('\n');
+}
+
+function formatStructuredBrandIdentityReply(identity: ParsedStructuredBrandIdentity): string {
+  return [
+    `Locked in. I saved ${identity.brandName || 'this brand'} as the operating identity.`,
+    `- World/niche: ${identity.niche || 'not set'}`,
+    `- Character lock: ${identity.characterName || identity.characterProfile || 'not set'}`,
+    `- Pillars: ${compactList(identity.contentPillars)}`,
+    `- Avoid: ${compactList(identity.avoidTopics)}`,
+    identity.episodeStructure ? `- Episode flow: ${identity.episodeStructure}` : '',
+    '',
+    'I will use this for scripts, images, video, voice, music, and scheduling unless you change it.',
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 function buildCapabilitiesReply(options: {
@@ -623,7 +668,7 @@ function buildCapabilitiesReply(options: {
   multiAgentEnabled: boolean;
 }): string {
   return [
-    'Here is exactly what I can execute right now:',
+    'Here is what I can actually run from this app:',
     '- Generate publish-ready posts, scripts, scenes, captions, hooks, and platform cuts.',
     '- Generate images and videos directly (not just prompts).',
     `- Current engines: chat model ${options.currentModel}, image ${options.imageProvider}, video ${options.videoProvider}.`,
@@ -632,10 +677,21 @@ function buildCapabilitiesReply(options: {
     '- Schedule content into the built-in scheduler and queue it for posting workers.',
     '- Run bulk scheduling from CSV or batch inputs via /bulk-schedule and queue jobs for execution.',
     '- Run background automation loops and sync engagement metrics.',
+    '- For media jobs, I will tell you which agent I am calling first and then return the finished asset or the exact provider failure.',
     `- System status: automation ${options.automationEnabled ? 'running' : 'paused'}, multi-agent ${options.multiAgentEnabled ? 'enabled' : 'disabled'}.`,
     '',
-    'If you want, give one command now and I will execute immediately: generate, analyze file, schedule, or start automation.',
+    'Send one command now: generate, analyze file, schedule, or start automation.',
   ].join('\n');
+}
+
+function humanizeStaticAgentReply(message: string): string {
+  return message
+    .replace(/\bHere is exactly what I can execute right now:/gi, 'Here is what I can actually run from this app:')
+    .replace(/\bHow can I assist you today\??/gi, 'What are we moving forward right now?')
+    .replace(/\bIf you need anything, let me know\.?/gi, 'Send the next piece when you are ready.')
+    .replace(/\bLet me know if you need further assistance\.?/gi, 'Send the next piece when you are ready.')
+    .replace(/\bUnderstood\./gi, 'I have it.')
+    .replace(/\bGot it\./gi, 'I have it.');
 }
 
 function emitAgentLatency(stage: string, durationMs: number, metadata: Record<string, unknown> = {}): void {
@@ -1629,6 +1685,10 @@ Rules:
   const extractAndSaveMemory = async (userMessage: string, aiResponse: string, intent: AgentIntent) => {
     try {
       const lowerMessage = userMessage.toLowerCase();
+      const structuredBrandIdentity = parseStructuredBrandIdentity(userMessage);
+      if (structuredBrandIdentity) {
+        await saveStructuredBrandIdentity(structuredBrandIdentity);
+      }
       const avoidPuterForStructuredMemory = shouldAvoidPuterForIntent(intent.type, userMessage);
       const platformMatches = Array.from(new Set(
         ['instagram', 'tiktok', 'youtube', 'linkedin', 'twitter', 'x', 'facebook', 'threads', 'pinterest']
@@ -1842,10 +1902,11 @@ Rules:
     let lastFileContext = '';
     try {
       const postCommandResponse = async (message: string) => {
+        const visibleMessage = humanizeStaticAgentReply(message);
         const assistantMessage: ChatMessage = {
           id: generateId(),
           role: 'assistant',
-          content: message,
+          content: visibleMessage,
           timestamp: new Date().toISOString(),
         };
         setState((s) => ({
@@ -2009,6 +2070,15 @@ Rules:
         return;
       }
 
+      if (attachedFiles.length === 0) {
+        const structuredBrandIdentity = parseStructuredBrandIdentity(normalizedContent);
+        if (structuredBrandIdentity) {
+          await saveStructuredBrandIdentity(structuredBrandIdentity);
+          await postCommandResponse(formatStructuredBrandIdentityReply(structuredBrandIdentity));
+          return;
+        }
+      }
+
       if (attachedFiles.length === 0 && wantsMemoryRecall(normalizedContent)) {
         const [memory, brandKit] = await Promise.all([
           loadAgentMemory(),
@@ -2071,6 +2141,17 @@ Rules:
       }
 
       if (attachedFiles.length === 0 && wantsBulkSchedule(normalizedContent)) {
+        if (isBulkScheduleQuestionOnly(normalizedContent)) {
+          await postCommandResponse(
+            [
+              'Yes. I can run bulk scheduling here.',
+              'I am not scheduling anything from that question.',
+              'When you want action, say "Run bulk schedule now" and include the CSV or batch posts.',
+            ].join('\n')
+          );
+          return;
+        }
+
         if (wantsBulkScheduleExecution(normalizedContent)) {
           await postCommandResponse(
             [
@@ -2492,7 +2573,7 @@ Rules:
           trackedGenerationId = tracked.record.id;
 
           await postProcessUpdate(
-            'I will run the full production pipeline first: visual agent, video agent, voice agent, music agent, then final mix if the assets are available.',
+            'I am starting the full production run now: visual agent, video agent, voice agent, music agent, then final mix if the assets are available.',
             'Starting production pipeline...'
           );
           const pipelineStart = Date.now();
@@ -2634,7 +2715,7 @@ Rules:
         trackedGenerationId = tracked.record.id;
 
         await postProcessUpdate(
-          'I will call the voice generation agent first, generate the narration audio, then attach the playable voice file here.',
+          'I am calling the voice generation agent first. When the narration file is ready, I will attach the playable audio here.',
           'Calling voice generation agent...'
         );
         const audioGenerationStart = Date.now();
@@ -2733,7 +2814,7 @@ Rules:
         trackedGenerationId = tracked.record.id;
 
         await postProcessUpdate(
-          'I will call the music generation agent first, build the soundtrack, then attach the playable audio here.',
+          'I am calling the music generation agent first. When the soundtrack is ready, I will attach the playable audio here.',
           'Calling music generation agent...'
         );
         const musicGenerationStart = Date.now();
