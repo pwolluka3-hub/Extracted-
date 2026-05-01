@@ -1,10 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canMirrorKvToLocalStorage, isSensitiveKvKey, readFile } from '../lib/services/puterService.ts';
+import { canMirrorKvToLocalStorage, isSensitiveKvKey, readFile, writeBinaryFile } from '../lib/services/puterService.ts';
 
 function createLocalStorage() {
   const store = new Map();
   return {
+    get length() {
+      return store.size;
+    },
+    key(index) {
+      return Array.from(store.keys())[index] || null;
+    },
     getItem(key) {
       return store.has(key) ? store.get(key) : null;
     },
@@ -73,6 +79,27 @@ test('readFile falls back to local persisted copy when Puter fs misses', async (
   try {
     const history = await readFile('/NexusAI/system/chat-history/messages.json', true);
     assert.deepEqual(history, [{ role: 'user', content: 'remember me' }]);
+  } finally {
+    if (previousWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = previousWindow;
+    }
+  }
+});
+
+test('writeBinaryFile skips oversized localStorage mirrors without Puter auth', async () => {
+  const previousWindow = globalThis.window;
+  const localStorage = createLocalStorage();
+  const oversizedBlob = new Blob(['x'.repeat(800000)], { type: 'audio/webm' });
+
+  globalThis.window = { localStorage };
+
+  try {
+    const saved = await writeBinaryFile('/NexusAI/content/assets/audio/large.webm', oversizedBlob);
+
+    assert.equal(saved, false);
+    assert.equal(localStorage.getItem('nexus:file:/NexusAI/content/assets/audio/large.webm'), null);
   } finally {
     if (previousWindow === undefined) {
       delete globalThis.window;

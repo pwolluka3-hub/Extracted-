@@ -3,7 +3,7 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, type ReactNode } from 'react';
 import type { ChatMessage, AttachedFile, AgentIntent, AIMessage } from '@/lib/types';
 import { universalChat, analyzeImage, getCurrentModel } from '@/lib/services/aiService';
-import { saveChatMessage, loadChatHistory, loadBrandKit, generateId, clearChatHistory, addToSchedule, loadSchedule, removeFromSchedule } from '@/lib/services/memoryService';
+import { saveChatMessage, loadChatHistory, loadBrandKit, generateId, clearChatHistory, addToSchedule, loadSchedule, removeFromSchedule, sanitizeChatMessagesForStorage } from '@/lib/services/memoryService';
 import { 
   loadAgentMemory, 
   buildMemoryContext, 
@@ -886,7 +886,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
 
   const saveSessionSnapshot = useCallback(async (nextState: AgentState) => {
     const snapshot: AgentSessionSnapshot = {
-      messages: nextState.messages.slice(-100),
+      messages: sanitizeChatMessagesForStorage(nextState.messages.slice(-100)),
       godModeEnabled: nextState.godModeEnabled,
       currentModel: nextState.currentModel,
       currentImageProvider: nextState.currentImageProvider,

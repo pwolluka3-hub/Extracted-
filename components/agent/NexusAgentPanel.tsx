@@ -45,6 +45,7 @@ function AgentMessage({
 
   const handleOpenAttachment = (attachment: AttachedFile) => {
     if (typeof window === 'undefined') return;
+    if (!attachment.data) return;
     const dataUrl = `data:${attachment.mimeType};base64,${attachment.data}`;
     window.open(dataUrl, '_blank', 'noopener,noreferrer');
   };
@@ -72,17 +73,19 @@ function AgentMessage({
                 <button
                   key={`${attachment.name}-${index}`}
                   onClick={() => handleOpenAttachment(attachment)}
+                  disabled={!attachment.data}
                   className={cn(
                     'w-full text-left rounded-lg border px-3 py-2 text-xs',
                     isUser
                       ? 'border-background/30 bg-background/10 text-background hover:bg-background/20'
-                      : 'border-border/60 bg-background/30 text-foreground hover:bg-background/50'
+                      : 'border-border/60 bg-background/30 text-foreground hover:bg-background/50',
+                    !attachment.data && 'cursor-default opacity-70'
                   )}
                   title={`Open ${attachment.name}`}
                 >
                   <span className="block truncate font-medium">{attachment.name}</span>
                   <span className={cn('block text-[10px] mt-0.5', isUser ? 'text-background/70' : 'text-muted-foreground')}>
-                    {(attachment.size / 1024).toFixed(1)} KB • Tap to open
+                    {(attachment.size / 1024).toFixed(1)} KB • {attachment.data ? 'Tap to open' : 'saved summary only'}
                   </span>
                 </button>
               ))}

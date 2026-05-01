@@ -15,6 +15,8 @@ const LOCAL_SECRET_PREFIX = 'nexus:secret:';
 const LOCAL_FILE_PREFIX = 'nexus:file:';
 const LOCAL_AUTH_KEY = 'nexus:auth:user';
 const LOCAL_AUTH_SESSION_KEY = 'nexus:auth:session';
+const MAX_LOCAL_BINARY_MIRROR_BYTES = 750000;
+const MAX_LOCAL_BINARY_MIRROR_CHARS = 1200000;
 const SENSITIVE_KV_KEY_PATTERN = /(?:^|[-_])(key|api[-_]?key|access[-_]?token|refresh[-_]?token|token|secret|password|credential)(?:$|[-_])/i;
 const SAFE_LOCAL_KV_KEYS = new Set([
   'ai_model',
@@ -50,6 +52,66 @@ export interface PuterAuthDiagnostics {
 
 function hasLocalStorage(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+}
+
+function isQuotaExceededError(error: unknown): boolean {
+  const candidate = error as { name?: string; code?: number; message?: string };
+  return (
+    candidate?.name === 'QuotaExceededError' ||
+    candidate?.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+    candidate?.code === 22 ||
+    candidate?.code === 1014 ||
+    /quota|storage|space/i.test(candidate?.message || String(error))
+  );
+}
+
+export function pruneOversizedLocalFileMirrors(maxChars = MAX_LOCAL_BINARY_MIRROR_CHARS): number {
+  if (!hasLocalStorage()) return 0;
+
+  let removed = 0;
+  for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
+    const key = window.localStorage.key(index);
+    if (!key?.startsWith(LOCAL_FILE_PREFIX)) continue;
+
+    const value = window.localStorage.getItem(key);
+    if (!value) continue;
+
+    const isMediaAsset = key.includes('/content/assets/');
+    const isInlineMedia = /^data:(?:audio|video|image)\//i.test(value);
+    if ((isMediaAsset && isInlineMedia) || value.length > maxChars) {
+      window.localStorage.removeItem(key);
+      removed += 1;
+    }
+  }
+
+  return removed;
+}
+
+function setLocalStorageWithQuotaRecovery(key: string, value: string): boolean {
+  if (!hasLocalStorage()) return false;
+
+  try {
+    window.localStorage.setItem(key, value);
+    return true;
+  } catch (error) {
+    if (!isQuotaExceededError(error)) {
+      throw error;
+    }
+
+    window.localStorage.removeItem(key);
+    pruneOversizedLocalFileMirrors();
+
+    try {
+      window.localStorage.setItem(key, value);
+      return true;
+    } catch (retryError) {
+      if (!isQuotaExceededError(retryError)) {
+        throw retryError;
+      }
+      console.warn('[PuterService] Local storage quota is full; skipped local mirror for', key);
+      return false;
+    }
+  }
 }
 
 export function isSensitiveKvKey(key: string): boolean {
@@ -734,14 +796,15 @@ export async function initFileSystem(): Promise<void> {
 export async function writeFile(path: string, content: unknown): Promise<boolean> {
   const fullPath = path.startsWith('/') ? path : `${BASE_PATH}/${path}`;
   const stringContent = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+  let localSaved = false;
   
   try {
     if (hasLocalStorage()) {
-      window.localStorage.setItem(localFileKey(fullPath), stringContent);
+      localSaved = setLocalStorageWithQuotaRecovery(localFileKey(fullPath), stringContent);
     }
 
     if (!isPuterAvailable() || !hasCachedAuthSession()) {
-      return hasLocalStorage();
+      return localSaved;
     }
 
     // Ensure parent directories exist
@@ -763,12 +826,12 @@ export async function writeFile(path: string, content: unknown): Promise<boolean
         return true;
       } catch {
         // Still failed - this is okay for new users, files will be created on next save
-        return false;
+        return localSaved;
       }
     }
     // Only log unexpected errors
     console.error('Puter fs.write error:', error);
-    return hasLocalStorage();
+    return localSaved;
   }
 }
 
@@ -778,20 +841,25 @@ export async function saveFile(path: string, content: unknown): Promise<boolean>
 
 export async function writeBinaryFile(path: string, blob: Blob): Promise<boolean> {
   const fullPath = path.startsWith('/') ? path : `${BASE_PATH}/${path}`;
+  let localSaved = false;
 
   try {
     if (hasLocalStorage()) {
-      const reader = new FileReader();
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        reader.onerror = () => reject(reader.error || new Error('Failed to serialize blob'));
-        reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : '');
-        reader.readAsDataURL(blob);
-      });
-      window.localStorage.setItem(localFileKey(fullPath), dataUrl);
+      if (blob.size <= MAX_LOCAL_BINARY_MIRROR_BYTES) {
+        const reader = new FileReader();
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          reader.onerror = () => reject(reader.error || new Error('Failed to serialize blob'));
+          reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+          reader.readAsDataURL(blob);
+        });
+        localSaved = setLocalStorageWithQuotaRecovery(localFileKey(fullPath), dataUrl);
+      } else {
+        pruneOversizedLocalFileMirrors();
+      }
     }
 
     if (!isPuterAvailable() || !hasCachedAuthSession()) {
-      return hasLocalStorage();
+      return localSaved;
     }
 
     const parentPath = fullPath.substring(0, fullPath.lastIndexOf('/'));
@@ -809,11 +877,11 @@ export async function writeBinaryFile(path: string, blob: Blob): Promise<boolean
         await window.puter.fs.write(fullPath, blob, { createMissingParents: true });
         return true;
       } catch {
-        return hasLocalStorage();
+        return localSaved;
       }
     }
     console.error('Puter fs.write(binary) error:', error);
-    return hasLocalStorage();
+    return localSaved;
   }
 }
 
@@ -853,7 +921,7 @@ export async function readFile<T = string>(path: string, parse = false): Promise
         const blob = await window.puter.fs.read(fullPath);
         text = await blob.text();
         if (hasLocalStorage()) {
-          window.localStorage.setItem(localFileKey(fullPath), text);
+          setLocalStorageWithQuotaRecovery(localFileKey(fullPath), text);
         }
       } catch (error) {
         puterReadError = error;

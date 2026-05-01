@@ -15,6 +15,14 @@ import {
   saveCloudSettings,
   listCloudDrafts,
 } from './cloudPersistenceService';
+import {
+  sanitizeChatMessageForStorage,
+  sanitizeChatMessagesForStorage,
+} from './chatStorageSanitizer.mjs';
+export {
+  sanitizeChatMessageForStorage,
+  sanitizeChatMessagesForStorage,
+} from './chatStorageSanitizer.mjs';
 
 // Initialize memory system
 export async function initMemory(): Promise<void> {
@@ -201,9 +209,9 @@ const MAX_CHAT_HISTORY = 100;
 
 export async function saveChatMessage(message: ChatMessage): Promise<boolean> {
   const historyPath = `${PATHS.chatHistory}/messages.json`;
-  const messages = await readFile<ChatMessage[]>(historyPath, true) || [];
+  const messages = sanitizeChatMessagesForStorage(await readFile<ChatMessage[]>(historyPath, true) || []);
   
-  messages.push(message);
+  messages.push(sanitizeChatMessageForStorage(message));
   
   // Keep only last MAX_CHAT_HISTORY messages
   const trimmed = messages.slice(-MAX_CHAT_HISTORY);
@@ -218,13 +226,20 @@ export async function saveChatMessage(message: ChatMessage): Promise<boolean> {
 export async function loadChatHistory(): Promise<ChatMessage[]> {
   const historyPath = `${PATHS.chatHistory}/messages.json`;
   const local = await readFile<ChatMessage[]>(historyPath, true);
-  if (local && local.length > 0) return local;
+  if (local && local.length > 0) {
+    const sanitized = sanitizeChatMessagesForStorage(local);
+    if (JSON.stringify(sanitized) !== JSON.stringify(local)) {
+      await writeFile(historyPath, sanitized);
+    }
+    return sanitized;
+  }
 
   const cloud = await loadCloudChatHistory().catch(() => []);
+  const sanitizedCloud = sanitizeChatMessagesForStorage(cloud);
   if (cloud.length > 0) {
-    await writeFile(historyPath, cloud);
+    await writeFile(historyPath, sanitizedCloud);
   }
-  return cloud;
+  return sanitizedCloud;
 }
 
 export async function clearChatHistory(): Promise<boolean> {
