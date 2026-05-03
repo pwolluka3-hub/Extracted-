@@ -1,6 +1,7 @@
-import type { ContentDraft, Platform } from '@/lib/types';
+import type { ContentDraft, Platform, BrandKit } from '@/lib/types';
 import { aiService } from './aiService';
 import { PATHS, readFile, writeFile, listFiles } from './puterService';
+import { logger } from '@/lib/utils/logger';
 
 export interface AnalyticsData {
   engagementRates: { [platform: string]: number };
@@ -123,12 +124,12 @@ class AnalyticsService {
       await writeFile(ANALYTICS_PATH, JSON.stringify(analytics, null, 2));
       return analytics;
     } catch (error) {
-      console.error('[v0] Analytics fetch error:', error);
+      logger.error('[v0] Analytics fetch error:', error);
       return createEmptyAnalytics();
     }
   }
 
-  async generateInsights(analyticsData: AnalyticsData, brandContext: any): Promise<string> {
+  async generateInsights(analyticsData: AnalyticsData, brandContext: BrandKit): Promise<string> {
     try {
       const prompt = `
         Based on this social media publishing activity, provide 2-3 practical insights and recommendations.
@@ -154,12 +155,12 @@ class AnalyticsService {
       const response = await aiService.chat(prompt, 'claude-sonnet-4-5');
       return response;
     } catch (error) {
-      console.error('[v0] Insights generation error:', error);
+      logger.error('[v0] Insights generation error:', error);
       return 'Unable to generate insights at this time.';
     }
   }
 
-  async updateAnalytics(postData: any): Promise<void> {
+  async updateAnalytics(postData: Partial<ContentDraft>): Promise<void> {
     try {
       const analytics = normalizeAnalytics(await readFile<AnalyticsData>(ANALYTICS_PATH, true));
 
@@ -195,6 +196,6 @@ export async function fetchAnalytics(ayrshareKey: string): Promise<AnalyticsData
   return analyticsService.fetchAnalytics(ayrshareKey);
 }
 
-export async function generateInsights(analyticsData: AnalyticsData, brandContext: any): Promise<string> {
+export async function generateInsights(analyticsData: AnalyticsData, brandContext: BrandKit): Promise<string> {
   return analyticsService.generateInsights(analyticsData, brandContext);
 }

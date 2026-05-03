@@ -130,15 +130,19 @@ class Logger {
     }
 
     // Send to error tracking in production
-    if (level === LogLevel.ERROR && typeof window !== 'undefined' && (window as any).Sentry) {
-      (window as any).Sentry.captureMessage(message, {
-        level: 'error',
-        extra: {
-          hasData: sanitizedData !== undefined,
-          data: sanitizedData,
-          error: sanitizedError,
-        },
-      });
+    if (level === LogLevel.ERROR && typeof window !== 'undefined') {
+      const sentry = (window as unknown as Record<string, unknown>).Sentry;
+      if (sentry && typeof sentry === 'object' && 'captureMessage' in sentry && typeof sentry.captureMessage === 'function') {
+        const captureMessage = sentry.captureMessage as (msg: string, opts: Record<string, unknown>) => void;
+        captureMessage(message, {
+          level: 'error',
+          extra: {
+            hasData: sanitizedData !== undefined,
+            data: sanitizedData,
+            error: sanitizedError,
+          },
+        });
+      }
     }
   }
 

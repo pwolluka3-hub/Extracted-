@@ -69,6 +69,24 @@ const PROVIDER_KEY_CANDIDATES: Record<Exclude<RoutedProvider, 'puter' | 'ollama'
 
 const providerCooldownUntil = new Map<RoutedProvider, number>();
 const PROVIDER_COOLDOWN_MS = 5 * 60 * 1000;
+const SERVER_PROVIDER_CACHE_MS = 30 * 1000;
+
+type ServerProxyProvider = Exclude<RoutedProvider, 'puter' | 'ollama'>;
+
+let serverConfiguredProvidersCache: {
+  expiresAt: number;
+  providers: ServerProxyProvider[];
+} | null = null;
+
+class ServerProxyError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ServerProxyError';
+    this.status = status;
+  }
+}
 
 // Sleep utility
 function sleep(ms: number): Promise<void> {
@@ -88,6 +106,42 @@ async function getFirstConfiguredValue(keys: string[]): Promise<string | null> {
 
 async function getProviderApiKey(provider: Exclude<RoutedProvider, 'puter' | 'ollama'>): Promise<string | null> {
   return getFirstConfiguredValue(PROVIDER_KEY_CANDIDATES[provider]);
+}
+
+function isServerProxyProvider(value: string): value is ServerProxyProvider {
+  return value in PROVIDER_KEY_CANDIDATES;
+}
+
+async function getServerConfiguredProviders(): Promise<ServerProxyProvider[]> {
+  if (typeof window === 'undefined') return [];
+
+  const now = Date.now();
+  if (serverConfiguredProvidersCache && serverConfiguredProvidersCache.expiresAt > now) {
+    return serverConfiguredProvidersCache.providers;
+  }
+
+  try {
+    const response = await fetch('/api/ai/providers', {
+      method: 'GET',
+      cache: 'no-store',
+    });
+    if (!response.ok) return [];
+
+    const data = await response.json() as {
+      providers?: Array<{ id?: string; configured?: boolean }>;
+    };
+    const providers = (data.providers || [])
+      .filter((provider) => provider.configured && provider.id && isServerProxyProvider(provider.id))
+      .map((provider) => provider.id as ServerProxyProvider);
+
+    serverConfiguredProvidersCache = {
+      expiresAt: now + SERVER_PROVIDER_CACHE_MS,
+      providers,
+    };
+    return providers;
+  } catch {
+    return [];
+  }
 }
 
 function buildMessageArray(
@@ -131,6 +185,41 @@ function normalizeChatMessages(messages: AIMessage[]): Array<{ role: string; con
             };
           }),
   }));
+}
+
+async function callServerChatProxy(
+  provider: ServerProxyProvider,
+  messages: AIMessage[],
+  model: string
+): Promise<string> {
+  if (typeof window === 'undefined') {
+    throw new ServerProxyError(0, 'Server proxy can only be called from the browser.');
+  }
+
+  const response = await fetch('/api/ai/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      provider,
+      model,
+      messages: normalizeChatMessages(messages),
+    }),
+  });
+  const data = await response.json().catch(() => ({})) as { text?: string; error?: string };
+
+  if (!response.ok) {
+    throw new ServerProxyError(response.status, data.error || `Server proxy failed for ${provider}.`);
+  }
+
+  if (!data.text?.trim()) {
+    throw new ServerProxyError(502, `Server proxy returned an empty response for ${provider}.`);
+  }
+
+  return data.text;
+}
+
+function canFallbackToBrowserProvider(error: unknown): boolean {
+  return error instanceof ServerProxyError && (error.status === 0 || error.status === 404 || error.status === 501);
 }
 
 function getErrorText(error: unknown): string {
@@ -211,19 +300,28 @@ function hasChatMessageResponse(value: unknown): value is { message: { content: 
 }
 
 async function callOpenAICompatibleChat(
+  provider: ServerProxyProvider,
   url: string,
-  apiKey: string,
+  apiKey: string | null,
   messages: AIMessage[],
   model: string,
   extraHeaders?: Record<string, string>
 ): Promise<string> {
-  // SECURITY: CSRF vulnerability - API keys exposed to external domains
-  // IMPORTANT: This should be proxied through your backend server instead of calling external APIs directly
-  // For production, implement an API proxy endpoint that:
-  // 1. Validates user authentication server-side
-  // 2. Stores API keys on backend (not in browser)
-  // 3. Adds CSRF tokens to requests
-  // 4. Implements rate limiting and request validation
+  let serverProxyError: unknown = null;
+
+  try {
+    return await callServerChatProxy(provider, messages, model);
+  } catch (error) {
+    serverProxyError = error;
+    if (!canFallbackToBrowserProvider(error) || !apiKey) {
+      throw error;
+    }
+  }
+
+  if (!apiKey) {
+    const serverReason = serverProxyError instanceof Error ? ` Server proxy: ${serverProxyError.message}` : '';
+    throw new Error(`${provider} API key not configured. Add it in Settings or configure the server provider environment key.${serverReason}`);
+  }
 
   const response = await fetch(url, {
     method: 'POST',
@@ -234,8 +332,7 @@ async function callOpenAICompatibleChat(
       'X-Requested-With': 'XMLHttpRequest',
       ...extraHeaders,
     },
-    // SECURITY: Include credentials for session-based CSRF protection
-    credentials: 'include',
+    credentials: 'omit',
     body: JSON.stringify({
       model,
       messages: normalizeChatMessages(messages),
@@ -263,6 +360,7 @@ async function getConfiguredProviders(): Promise<RoutedProvider[]> {
     getProviderApiKey('together'),
     getProviderApiKey('fireworks'),
     kvGet('ollama_url'),
+    getServerConfiguredProviders(),
   ]);
 
   const [
@@ -277,21 +375,22 @@ async function getConfiguredProviders(): Promise<RoutedProvider[]> {
     togetherKey,
     fireworksKey,
     ollamaUrl,
+    serverConfiguredProviders,
   ] = keyChecks;
 
-  const configured: RoutedProvider[] = ['puter'];
-  if (openrouterKey) configured.push('openrouter');
-  if (githubModelsKey) configured.push('githubmodels');
-  if (bytezKey) configured.push('bytez');
-  if (poeKey) configured.push('poe');
-  if (groqKey) configured.push('groq');
-  if (geminiKey) configured.push('gemini');
-  if (deepseekKey) configured.push('deepseek');
-  if (nvidiaKey) configured.push('nvidia');
-  if (togetherKey) configured.push('together');
-  if (fireworksKey) configured.push('fireworks');
-  if (ollamaUrl) configured.push('ollama');
-  return configured;
+  const configured = new Set<RoutedProvider>(['puter', ...serverConfiguredProviders]);
+  if (openrouterKey) configured.add('openrouter');
+  if (githubModelsKey) configured.add('githubmodels');
+  if (bytezKey) configured.add('bytez');
+  if (poeKey) configured.add('poe');
+  if (groqKey) configured.add('groq');
+  if (geminiKey) configured.add('gemini');
+  if (deepseekKey) configured.add('deepseek');
+  if (nvidiaKey) configured.add('nvidia');
+  if (togetherKey) configured.add('together');
+  if (fireworksKey) configured.add('fireworks');
+  if (ollamaUrl) configured.add('ollama');
+  return Array.from(configured);
 }
 
 // Retry with exponential backoff
@@ -448,12 +547,10 @@ export async function chatWithGemini(
   
   // Get Gemini API key from storage
   const apiKey = await getProviderApiKey('gemini');
-  if (!apiKey) {
-    throw new Error('Gemini API key not configured');
-  }
 
   // Get memory context if not provided
   const memory = memoryContext ?? await buildMemoryContext();
+  const messageArray = buildMessageArray(messages, brandKit, memory);
 
   // Build request body
   let contents: { role: string; parts: { text: string }[] }[];
@@ -481,11 +578,26 @@ export async function chatWithGemini(
   }
 
   return withRetry(async () => {
+    try {
+      return await callServerChatProxy('gemini', messageArray, 'gemini-1.5-pro');
+    } catch (error) {
+      if (!canFallbackToBrowserProvider(error) || !apiKey) {
+        throw error;
+      }
+    }
+
+    if (!apiKey) {
+      throw new Error('Gemini API key not configured. Add it in Settings or configure GEMINI_API_KEY on the server.');
+    }
+
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${apiKey}`,
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey
+        },
         body: JSON.stringify({ contents })
       }
     );
@@ -508,34 +620,20 @@ export async function chatWithGroq(
   const { model = 'llama-3.3-70b-versatile', brandKit = null, memoryContext } = options;
   
   const apiKey = await getProviderApiKey('groq');
-  if (!apiKey) throw new Error('Groq API key not configured. Add it in Settings.');
   
   // Get memory context if not provided
   const memory = memoryContext ?? await buildMemoryContext();
   
-  const messageArray = typeof messages === 'string' 
-    ? [{ role: 'user', content: buildSystemPrompt(brandKit, undefined, memory) + '\n\n' + messages }]
-    : messages;
+  const messageArray = buildMessageArray(messages, brandKit, memory);
   
   return withRetry(async () => {
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: model.replace('groq/', ''),
-        messages: messageArray.map(m => ({
-          role: m.role,
-          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
-        })),
-      }),
-    });
-    
-    if (!response.ok) throw new Error(`Groq error: ${await response.text()}`);
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content || '';
+    return callOpenAICompatibleChat(
+      'groq',
+      'https://api.groq.com/openai/v1/chat/completions',
+      apiKey,
+      messageArray,
+      model.replace('groq/', '')
+    );
   }, 3, 'chatWithGroq');
 }
 
@@ -547,7 +645,6 @@ export async function chatWithOpenRouter(
   const { model = 'openrouter/auto', brandKit = null, memoryContext } = options;
   
   const apiKey = await getProviderApiKey('openrouter');
-  if (!apiKey) throw new Error('OpenRouter API key not configured. Add it in Settings.');
   
   // Get memory context if not provided
   const memory = memoryContext ?? await buildMemoryContext();
@@ -556,6 +653,7 @@ export async function chatWithOpenRouter(
   
   return withRetry(async () => {
     return callOpenAICompatibleChat(
+      'openrouter',
       'https://openrouter.ai/api/v1/chat/completions',
       apiKey,
       messageArray,
@@ -573,12 +671,12 @@ export async function chatWithGitHubModels(
 ): Promise<string> {
   const { model = 'openai/gpt-4o', brandKit = null, memoryContext } = options;
   const apiKey = await getProviderApiKey('githubmodels');
-  if (!apiKey) throw new Error('GitHub Models API key not configured. Add it in Settings.');
   const memory = memoryContext ?? await buildMemoryContext();
   const messageArray = buildMessageArray(messages, brandKit, memory);
 
   return withRetry(async () => {
     return callOpenAICompatibleChat(
+      'githubmodels',
       'https://models.github.ai/inference/chat/completions',
       apiKey,
       messageArray,
@@ -593,12 +691,12 @@ export async function chatWithBytez(
 ): Promise<string> {
   const { model = 'Qwen/Qwen3-4B', brandKit = null, memoryContext } = options;
   const apiKey = await getProviderApiKey('bytez');
-  if (!apiKey) throw new Error('Bytez API key not configured. Add it in Settings.');
   const memory = memoryContext ?? await buildMemoryContext();
   const messageArray = buildMessageArray(messages, brandKit, memory);
 
   return withRetry(async () => {
     return callOpenAICompatibleChat(
+      'bytez',
       'https://api.bytez.com/v1/chat/completions',
       apiKey,
       messageArray,
@@ -613,12 +711,12 @@ export async function chatWithPoe(
 ): Promise<string> {
   const { model = 'Claude-Sonnet-4.6', brandKit = null, memoryContext } = options;
   const apiKey = await getProviderApiKey('poe');
-  if (!apiKey) throw new Error('Poe API key not configured. Add it in Settings.');
   const memory = memoryContext ?? await buildMemoryContext();
   const messageArray = buildMessageArray(messages, brandKit, memory);
 
   return withRetry(async () => {
     return callOpenAICompatibleChat(
+      'poe',
       'https://api.poe.com/v1/chat/completions',
       apiKey,
       messageArray,
@@ -635,34 +733,20 @@ export async function chatWithNvidia(
   const { model = 'nvidia/llama-3.1-nemotron-70b-instruct', brandKit = null, memoryContext } = options;
   
   const apiKey = await getProviderApiKey('nvidia');
-  if (!apiKey) throw new Error('NVIDIA API key not configured. Add it in Settings.');
   
   // Get memory context if not provided
   const memory = memoryContext ?? await buildMemoryContext();
   
-  const messageArray = typeof messages === 'string' 
-    ? [{ role: 'user', content: buildSystemPrompt(brandKit, undefined, memory) + '\n\n' + messages }]
-    : messages;
+  const messageArray = buildMessageArray(messages, brandKit, memory);
   
   return withRetry(async () => {
-    const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: model.replace('nvidia/', ''),
-        messages: messageArray.map(m => ({
-          role: m.role,
-          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
-        })),
-      }),
-    });
-    
-    if (!response.ok) throw new Error(`NVIDIA error: ${await response.text()}`);
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content || '';
+    return callOpenAICompatibleChat(
+      'nvidia',
+      'https://integrate.api.nvidia.com/v1/chat/completions',
+      apiKey,
+      messageArray,
+      model.replace('nvidia/', '')
+    );
   }, 3, 'chatWithNvidia');
 }
 
@@ -672,12 +756,12 @@ export async function chatWithTogether(
 ): Promise<string> {
   const { model = 'meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo', brandKit = null, memoryContext } = options;
   const apiKey = await getProviderApiKey('together');
-  if (!apiKey) throw new Error('Together API key not configured. Add it in Settings.');
   const memory = memoryContext ?? await buildMemoryContext();
   const messageArray = buildMessageArray(messages, brandKit, memory);
 
   return withRetry(async () => {
     return callOpenAICompatibleChat(
+      'together',
       'https://api.together.xyz/v1/chat/completions',
       apiKey,
       messageArray,
@@ -692,12 +776,12 @@ export async function chatWithFireworks(
 ): Promise<string> {
   const { model = 'accounts/fireworks/models/llama-v3p1-70b-instruct', brandKit = null, memoryContext } = options;
   const apiKey = await getProviderApiKey('fireworks');
-  if (!apiKey) throw new Error('Fireworks API key not configured. Add it in Settings.');
   const memory = memoryContext ?? await buildMemoryContext();
   const messageArray = buildMessageArray(messages, brandKit, memory);
 
   return withRetry(async () => {
     return callOpenAICompatibleChat(
+      'fireworks',
       'https://api.fireworks.ai/inference/v1/chat/completions',
       apiKey,
       messageArray,
@@ -750,34 +834,20 @@ export async function chatWithDeepSeek(
   const { model = 'deepseek-chat', brandKit = null, memoryContext } = options;
   
   const apiKey = await getProviderApiKey('deepseek');
-  if (!apiKey) throw new Error('DeepSeek API key not configured. Add it in Settings.');
   
   // Get memory context if not provided
   const memory = memoryContext ?? await buildMemoryContext();
   
-  const messageArray = typeof messages === 'string' 
-    ? [{ role: 'user', content: buildSystemPrompt(brandKit, undefined, memory) + '\n\n' + messages }]
-    : messages;
+  const messageArray = buildMessageArray(messages, brandKit, memory);
   
   return withRetry(async () => {
-    const response = await fetch('https://api.deepseek.com/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: messageArray.map(m => ({
-          role: m.role,
-          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
-        })),
-      }),
-    });
-    
-    if (!response.ok) throw new Error(`DeepSeek error: ${await response.text()}`);
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content || '';
+    return callOpenAICompatibleChat(
+      'deepseek',
+      'https://api.deepseek.com/chat/completions',
+      apiKey,
+      messageArray,
+      model
+    );
   }, 3, 'chatWithDeepSeek');
 }
 

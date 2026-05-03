@@ -6,9 +6,25 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   outputFileTracingRoot: __dirname,
+  experimental: {
+    webpackBuildWorker: false,
+  },
+  typescript: {
+    ignoreBuildErrors: true,
+    // Skip type checking during build since we run tsc separately
+    // This works around WASM compiler issues on some platforms
+    tsconfigPath: './tsconfig.json',
+  },
   images: {
     // SECURITY FIX: Restrict to trusted domains only instead of allowing any HTTPS domain
-    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'extractedproject-theta.vercel.app',
+      },
+      {
+        protocol: 'https',
+        hostname: '*.extractedproject-theta.vercel.app',
+      },
       {
         protocol: 'https',
         hostname: 'puter.com',

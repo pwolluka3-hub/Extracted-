@@ -16,9 +16,9 @@ export default function BulkSchedulePage() {
     const dayAfter = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
     const isoDate = (date: Date) => date.toISOString().slice(0, 10);
 
-    const template = `text,image_url,platforms,schedule_date,hashtags
-"Your post text here","https://example.com/image.jpg","twitter,instagram,linkedin","${isoDate(tomorrow)}","#marketing #ai"
-"Another post","","twitter","${isoDate(dayAfter)}","#content"`;
+    const template = `text,image_url,platforms,schedule_date,time,hashtags
+"Your post text here","https://example.com/image.jpg","twitter,instagram,linkedin","${isoDate(tomorrow)}","10:00","#marketing #ai"
+"Another post","","twitter","${isoDate(dayAfter)}","14:00","#content"`;
     const blob = new Blob([template], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -70,8 +70,13 @@ export default function BulkSchedulePage() {
         };
       });
       const results = await scheduleBulkPosts(normalizedPosts);
-      setErrors([`Successfully scheduled ${results.successful} out of ${results.total} posts`]);
-      setParsedPosts([]);
+      setErrors([
+        `Provider accepted ${results.successful} out of ${results.total} posts.${results.failed > 0 ? ` ${results.failed} failed.` : ''}`,
+        ...results.errors,
+      ]);
+      if (results.failed === 0) {
+        setParsedPosts([]);
+      }
     } catch (error) {
       setErrors([error instanceof Error ? error.message : 'Failed to schedule posts']);
     } finally {
@@ -122,9 +127,9 @@ export default function BulkSchedulePage() {
       </GlassCard>
 
       {errors.length > 0 && (
-        <GlassCard className={`p-4 border ${errors[0].includes('Successfully') ? 'border-[var(--nexus-success)]/30 bg-[var(--nexus-success)]/5' : 'border-[var(--nexus-error)]/30 bg-[var(--nexus-error)]/5'}`}>
+        <GlassCard className={`p-4 border ${errors[0].includes('Provider accepted') && !errors[0].includes('failed') ? 'border-[var(--nexus-success)]/30 bg-[var(--nexus-success)]/5' : 'border-[var(--nexus-error)]/30 bg-[var(--nexus-error)]/5'}`}>
           <div className="flex gap-2">
-            {errors[0].includes('Successfully') ? (
+            {errors[0].includes('Provider accepted') && !errors[0].includes('failed') ? (
               <CheckCircle2 className="w-5 h-5 text-[var(--nexus-success)]" />
             ) : (
               <AlertCircle className="w-5 h-5 text-[var(--nexus-error)]" />

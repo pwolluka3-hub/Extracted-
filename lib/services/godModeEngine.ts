@@ -192,9 +192,12 @@ export async function callCustomProvider(
       contents[0].parts[0].text = systemContent + '\n\n' + contents[0].parts[0].text;
     }
 
-    const response = await fetch(`${provider.baseUrl}/${model}:generateContent?key=${apiKey}`, {
+    const response = await fetch(`${provider.baseUrl}/${model}:generateContent`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey
+      },
       body: JSON.stringify({ contents }),
     });
 

@@ -2,41 +2,8 @@
 
 import type { Platform } from '@/lib/types';
 import { generateId } from './memoryService';
-import { kvGet, kvSet } from './puterService';
-
-const POST_QUEUE_KEY = 'nexus_post_queue_v1';
-
-export interface QueuedPostJob {
-  id: string;
-  text: string;
-  platforms: Platform[];
-  mediaUrl?: string;
-  generationId?: string;
-  pipelineRunId?: string;
-  niche?: string;
-  hook?: string;
-  scheduledAt?: string;
-  status: 'queued' | 'processing' | 'posted' | 'failed';
-  attempts: number;
-  lastError?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-async function readQueue(): Promise<QueuedPostJob[]> {
-  try {
-    const raw = await kvGet(POST_QUEUE_KEY);
-    if (!raw || typeof raw !== 'string') return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed as QueuedPostJob[] : [];
-  } catch {
-    return [];
-  }
-}
-
-async function writeQueue(queue: QueuedPostJob[]): Promise<void> {
-  await kvSet(POST_QUEUE_KEY, JSON.stringify(queue.slice(-500)));
-}
+import { getSupabaseBrowserClient } from '@/lib/supabase/client';
+import type { QueuedPostJob } from '@/lib/types';
 
 export async function enqueuePostJob(input: {
   text: string;
@@ -48,7 +15,9 @@ export async function enqueuePostJob(input: {
   hook?: string;
   scheduledAt?: string;
 }): Promise<QueuedPostJob> {
-  const queue = await readQueue();
+  const supabase = getSupabaseBrowserClient();
+  if (!supabase) throw new Error('Supabase client not initialized');
+
   const now = new Date().toISOString();
   const job: QueuedPostJob = {
     id: generateId(),
@@ -65,31 +34,52 @@ export async function enqueuePostJob(input: {
     createdAt: now,
     updatedAt: now,
   };
-  queue.push(job);
-  await writeQueue(queue);
+
+  const { error } = await supabase
+    .from('posts_queue')
+    .insert([job]);
+
+  if (error) throw error;
   return job;
 }
 
 export async function loadQueuedPostJobs(): Promise<QueuedPostJob[]> {
-  return readQueue();
+  const supabase = getSupabaseBrowserClient();
+  if (!supabase) return [];
+
+  const { data, error } = await supabase
+    .from('posts_queue')
+    .select('*')
+    .order('createdAt', { ascending: true });
+
+  if (error) {
+    console.error('[PostQueueService] Failed to load jobs:', error);
+    return [];
+  }
+
+  return data || [];
 }
 
 export async function updateQueuedPostJob(jobId: string, updates: Partial<QueuedPostJob>): Promise<void> {
-  const queue = await readQueue();
-  const next = queue.map((job) =>
-    job.id === jobId
-      ? { ...job, ...updates, updatedAt: new Date().toISOString() }
-      : job
-  );
-  await writeQueue(next);
+  const supabase = getSupabaseBrowserClient();
+  if (!supabase) throw new Error('Supabase client not initialized');
+
+  const { error } = await supabase
+    .from('posts_queue')
+    .update({ ...updates, updatedAt: new Date().toISOString() })
+    .eq('id', jobId);
+
+  if (error) throw error;
 }
 
 export async function removeQueuedPostJob(jobId: string): Promise<boolean> {
-  const queue = await readQueue();
-  const next = queue.filter((job) => job.id !== jobId);
-  const removed = next.length !== queue.length;
-  if (removed) {
-    await writeQueue(next);
-  }
-  return removed;
+  const supabase = getSupabaseBrowserClient();
+  if (!supabase) return false;
+
+  const { error } = await supabase
+    .from('posts_queue')
+    .delete()
+    .eq('id', jobId);
+
+  return !error;
 }

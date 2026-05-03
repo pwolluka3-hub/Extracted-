@@ -65,6 +65,12 @@ export interface UsageBudget {
   hardLimit: boolean;
 }
 
+const SERVER_PROVIDER_CACHE_MS = 30 * 1000;
+let serverConfiguredProviderCache: {
+  expiresAt: number;
+  providers: Set<string>;
+} | null = null;
+
 // Provider definitions with capabilities
 const PROVIDER_DEFINITIONS: Omit<ProviderCapability, 'status' | 'lastHealthCheck' | 'apiKeyConfigured'>[] = [
   {
@@ -316,7 +322,42 @@ async function checkApiKeyConfigured(providerId: string): Promise<boolean> {
   if (!keyName) return true; // No key required
 
   const key = sanitizeApiKey(await kvGet(keyName));
-  return key.length > 0;
+  if (key.length > 0) return true;
+
+  const serverConfigured = await getServerConfiguredProviderSet();
+  return serverConfigured.has(providerId);
+}
+
+async function getServerConfiguredProviderSet(): Promise<Set<string>> {
+  if (typeof window === 'undefined') return new Set();
+
+  const now = Date.now();
+  if (serverConfiguredProviderCache && serverConfiguredProviderCache.expiresAt > now) {
+    return serverConfiguredProviderCache.providers;
+  }
+
+  try {
+    const response = await fetch('/api/ai/providers', {
+      method: 'GET',
+      cache: 'no-store',
+    });
+    if (!response.ok) return new Set();
+    const data = await response.json() as {
+      providers?: Array<{ id?: string; configured?: boolean }>;
+    };
+    const providers = new Set(
+      (data.providers || [])
+        .filter((provider) => provider.configured && provider.id)
+        .map((provider) => provider.id as string)
+    );
+    serverConfiguredProviderCache = {
+      expiresAt: now + SERVER_PROVIDER_CACHE_MS,
+      providers,
+    };
+    return providers;
+  } catch {
+    return new Set();
+  }
 }
 
 // Get provider health status

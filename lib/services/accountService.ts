@@ -380,7 +380,9 @@ export async function verifyProviderKey(providerId: string, apiKey: string): Pro
       }
 
       case 'gemini': {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${sanitizedApiKey}`);
+        const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
+          headers: { 'x-goog-api-key': sanitizedApiKey }
+        });
         return { valid: response.ok, error: response.ok ? undefined : 'Invalid Gemini API key' };
       }
 

@@ -14,6 +14,7 @@ import {
   checkBudget,
   type ProviderCapability 
 } from '@/lib/services/providerCapabilityService';
+import { runMonitorAndRetry } from '@/lib/services/monitorRetryService';
 import { 
   RefreshCw, 
   CheckCircle2, 
@@ -33,6 +34,8 @@ export default function DiagnosticsPage() {
   const [budget, setBudget] = useState<Awaited<ReturnType<typeof checkBudget>> | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [runningWorkers, setRunningWorkers] = useState(false);
+  const [workerResult, setWorkerResult] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
@@ -61,6 +64,22 @@ export default function DiagnosticsPage() {
     await healthCheckAllProviders();
     await loadData();
     setRefreshing(false);
+  };
+
+  const handleRunWorkers = async () => {
+    setRunningWorkers(true);
+    setWorkerResult(null);
+    try {
+      const report = await runMonitorAndRetry(10);
+      setWorkerResult(
+        `Processed ${report.worker.processed} queued jobs, posted ${report.worker.posted}, failed ${report.worker.failed}. Analytics checked ${report.analytics.checked}.`
+      );
+      await loadData();
+    } catch (error) {
+      setWorkerResult(error instanceof Error ? error.message : 'Worker run failed.');
+    } finally {
+      setRunningWorkers(false);
+    }
   };
 
   const getStatusIcon = (status: DiagnosticResult['status'] | 'unknown') => {
@@ -101,19 +120,36 @@ export default function DiagnosticsPage() {
 
   return (
     <div className="max-w-5xl mx-auto">
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mb-8">
         <div>
           <h1 className="text-3xl font-bold text-foreground">System Diagnostics</h1>
           <p className="text-muted-foreground">Monitor connections and system health</p>
         </div>
-        <NeonButton
-          onClick={handleRefresh}
-          loading={refreshing}
-          icon={<RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />}
-        >
-          Refresh
-        </NeonButton>
+        <div className="flex flex-wrap gap-2">
+          <NeonButton
+            onClick={handleRefresh}
+            loading={refreshing}
+            icon={<RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />}
+          >
+            Refresh
+          </NeonButton>
+          <NeonButton
+            onClick={handleRunWorkers}
+            loading={runningWorkers}
+            disabled={runningWorkers}
+            variant="outline"
+            icon={<Zap className="w-4 h-4" />}
+          >
+            Run Posting Workers
+          </NeonButton>
+        </div>
       </div>
+
+      {workerResult && (
+        <GlassCard className="p-4 mb-6 border border-[var(--nexus-cyan)]/30">
+          <p className="text-sm text-muted-foreground">{workerResult}</p>
+        </GlassCard>
+      )}
 
       {/* Overall Health */}
       {diagnostics && (

@@ -2,6 +2,11 @@
 import { readFile, writeFile, PATHS } from './puterService';
 import { universalChat } from './aiService';
 import type { Platform, BrandKit } from '@/lib/types';
+import { schedulePost } from './publishService';
+import {
+  formatPostWithHashtags,
+  getPublisherMediaBlockReason,
+} from './publishingReadinessService';
 
 export interface BulkPost {
   id: string;
@@ -12,6 +17,7 @@ export interface BulkPost {
   hashtags?: string[];
   status: 'pending' | 'scheduled' | 'published' | 'failed';
   error?: string;
+  providerPostId?: string;
 }
 
 export interface CSVRow {
@@ -71,6 +77,7 @@ export function parseCSV(csvContent: string): CSVRow[] {
           row.platforms = value;
           break;
         case 'date':
+        case 'schedule_date':
         case 'scheduled_date':
           row.date = value;
           break;
@@ -115,13 +122,19 @@ export async function parseBulkCSV(csvContent: string): Promise<{
       validationErrors.push(`Row ${index + 2}: No valid platforms found, defaulting to Twitter`);
     }
 
+    const scheduledAtInput = row.date ? `${row.date}${row.time ? ` ${row.time}` : ''}` : '';
+    const scheduledAtDate = scheduledAtInput ? new Date(scheduledAtInput) : null;
+    if (row.date && (!scheduledAtDate || Number.isNaN(scheduledAtDate.getTime()))) {
+      validationErrors.push(`Row ${index + 2}: Invalid schedule date/time`);
+    }
+
     return {
       id: `bulk_${Date.now()}_${index}`,
       content: row.content,
       text: row.content,
       platforms: parsedPlatforms.length > 0 ? parsedPlatforms : ['twitter' as Platform],
       schedule_date: row.date ? `${row.date}${row.time ? `T${row.time}` : ''}` : undefined,
-      scheduledAt: row.date ? new Date(`${row.date}${row.time ? ` ${row.time}` : ''}`).toISOString() : undefined,
+      scheduledAt: scheduledAtDate && !Number.isNaN(scheduledAtDate.getTime()) ? scheduledAtDate.toISOString() : undefined,
       imageUrl: row.imageUrl || undefined,
       hashtags: row.hashtags ? row.hashtags.split(/[,;|#]/).map(h => h.trim()).filter(Boolean) : undefined,
       status: 'pending' as const,
@@ -234,10 +247,79 @@ export async function saveBulkPosts(posts: BulkPost[]): Promise<void> {
 
 export async function scheduleBulkPosts(posts: BulkPost[] | Array<BulkPost & { text?: string }>): Promise<{
   successful: number;
+  failed: number;
   total: number;
+  errors: string[];
 }> {
-  const normalized = posts.map(post => ({
-    id: post.id,
+  const normalized = await Promise.all(posts.map(async (post, index) => {
+    const content = post.content || ('text' in post ? post.text : '') || '';
+    const scheduledAt = post.scheduledAt;
+    const mediaBlockReason = getPublisherMediaBlockReason(post.imageUrl);
+
+    if (!scheduledAt) {
+      return {
+        id: post.id,
+        content,
+        platforms: post.platforms,
+        scheduledAt,
+        imageUrl: post.imageUrl,
+        hashtags: post.hashtags,
+        status: 'failed' as const,
+        error: `Row ${index + 1}: Missing schedule date/time.`,
+      };
+    }
+
+    if (mediaBlockReason) {
+      return {
+        id: post.id,
+        content,
+        platforms: post.platforms,
+        scheduledAt,
+        imageUrl: post.imageUrl,
+        hashtags: post.hashtags,
+        status: 'failed' as const,
+        error: `Row ${index + 1}: ${mediaBlockReason}`,
+      };
+    }
+
+    const providerResult = await schedulePost({
+      text: formatPostWithHashtags(content, post.hashtags),
+      platforms: post.platforms,
+      scheduledDate: scheduledAt,
+      mediaUrl: post.imageUrl,
+      source: 'manual',
+    });
+
+    return {
+      id: post.id,
+      content,
+      platforms: post.platforms,
+      scheduledAt,
+      imageUrl: post.imageUrl,
+      hashtags: post.hashtags,
+      status: providerResult.success ? 'scheduled' as const : 'failed' as const,
+      error: providerResult.success ? undefined : `Row ${index + 1}: ${providerResult.error || 'Publishing provider did not accept the schedule.'}`,
+      providerPostId: providerResult.postId,
+    };
+  }));
+
+  await saveBulkPosts(normalized);
+  const errors = normalized
+    .map(post => post.error)
+    .filter((error): error is string => Boolean(error));
+  const successful = normalized.filter(post => post.status === 'scheduled').length;
+
+  return {
+    successful,
+    failed: normalized.length - successful,
+    total: posts.length,
+    errors,
+  };
+}
+
+export function normalizeBulkScheduleInput(post: BulkScheduleInput & { text?: string }): BulkPost {
+  return {
+    id: post.id || `bulk_${Date.now()}`,
     content: post.content || ('text' in post ? post.text : '') || '',
     platforms: post.platforms,
     scheduledAt: post.scheduledAt,
@@ -245,12 +327,6 @@ export async function scheduleBulkPosts(posts: BulkPost[] | Array<BulkPost & { t
     hashtags: post.hashtags,
     status: post.status || 'pending',
     error: post.error,
-  })) as BulkPost[];
-
-  await saveBulkPosts(normalized);
-  return {
-    successful: normalized.length,
-    total: posts.length,
   };
 }
 

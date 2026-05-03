@@ -302,7 +302,22 @@ export async function loadSkill<T = unknown>(name: string): Promise<T | null> {
   return readFile<T>(path, true);
 }
 
-// Generate unique ID
+// Generate unique ID using cryptographically secure random
 export function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+  const bytes = new Uint8Array(6);
+  if (typeof window !== 'undefined' && window.crypto) {
+    window.crypto.getRandomValues(bytes);
+  } else if (typeof global !== 'undefined' && global.crypto) {
+    global.crypto.getRandomValues(bytes);
+  } else {
+    // Fallback for environments without crypto
+    for (let i = 0; i < bytes.length; i++) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+  const randomPart = Array.from(bytes)
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('')
+    .substring(0, 9);
+  return `${Date.now()}-${randomPart}`;
 }

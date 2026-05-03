@@ -169,6 +169,9 @@ export interface ScheduledPost {
   scheduledAt: string;
   status: 'pending' | 'publishing' | 'published' | 'failed';
   error?: string;
+  provider?: 'ayrshare' | 'local';
+  providerPostId?: string;
+  localOnly?: boolean;
   publishedUrls?: Record<Platform, string>;
 }
 

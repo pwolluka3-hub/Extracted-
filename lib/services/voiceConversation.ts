@@ -113,7 +113,9 @@ class VoiceConversationService {
     if (!this.synthesis) return;
     
     const loadVoiceList = () => {
-      const voices = this.synthesis!.getVoices();
+      const voices = this.synthesis?.getVoices() || [];
+      if (voices.length === 0) return;
+      
       // Prefer a natural English voice
       this.selectedVoice = voices.find(v => 
         v.lang.startsWith('en') && v.name.includes('Natural')
@@ -195,7 +197,11 @@ class VoiceConversationService {
         resolve();
       };
       
-      this.synthesis!.speak(utterance);
+      if (this.synthesis) {
+        this.synthesis.speak(utterance);
+      } else {
+        reject(new Error('Speech synthesis not available'));
+      }
     });
   }
   

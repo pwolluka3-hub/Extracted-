@@ -19,6 +19,7 @@ interface AuthState {
 
 interface AuthContextType extends AuthState {
   login: () => Promise<boolean>;
+  loginWithSupabase: (provider: 'google' | 'github' | 'discord') => Promise<void>;
   logout: () => Promise<void>;
   enterGuestMode: () => void;
   refreshBrandKit: () => Promise<void>;
@@ -281,6 +282,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const loginWithSupabase = useCallback(async (provider: 'google' | 'github' | 'discord') => {
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      console.error('Supabase client not available');
+      return;
+    }
+
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
+    });
+
+    if (error) {
+      console.error(`Supabase ${provider} login failed:`, error);
+      throw error;
+    }
+  }, []);
+
   const enterGuestMode = useCallback(() => {
     writeGuestMode(true);
     setState((current) => ({
@@ -327,6 +348,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value={{
         ...state,
         login,
+        loginWithSupabase,
         logout,
         enterGuestMode,
         refreshBrandKit,

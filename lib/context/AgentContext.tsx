@@ -82,8 +82,10 @@ import {
   type ChatModelDetail,
 } from '@/lib/services/providerControl';
 import { draftsService } from '@/lib/services/draftsService';
-import { enqueuePostJob, loadQueuedPostJobs, removeQueuedPostJob } from '@/lib/services/postQueueService';
+import { loadQueuedPostJobs, removeQueuedPostJob } from '@/lib/services/postQueueService';
 import { persistBlobMediaAsset, persistMediaReference } from '@/lib/services/mediaAssetPersistenceService';
+import { schedulePost } from '@/lib/services/publishService';
+import { getPublisherMediaBlockReason } from '@/lib/services/publishingReadinessService';
 
 const IMAGE_ENGINE_OPTIONS = [
   { model: 'puter', name: 'Puter Image' },
@@ -111,7 +113,8 @@ const FILE_CONTEXT_LIMIT = 12_000;
 const PAGE_BLOCK_PATTERN = /\[Page \d+\][\s\S]*?(?=\n\n\[Page \d+\]|$)/g;
 const NICHE_CLARIFICATION_PATTERN = /\bwhat niche should i lock before generating\??\b/i;
 const REWRITE_REQUEST_PATTERN = /\b(rewrite|regenerate|redo|rework|fix|improve)\b.*\b(script|scene|story|version|this)\b/i;
-const SCHEDULE_REQUEST_PATTERN = /\b(schedule|queue|plan|slot)\b[\s\S]{0,40}\b(post|content|draft|caption|script|scene|reel|video|image|this|it|scheduler|calendar|later)\b/i;
+const CONTENT_PLAN_REQUEST_PATTERN = /\b(plan|map|outline|calendar)\b[\s\S]{0,80}\b(week|7\s*day|seven\s*day|month|content plan|content calendar|posts?|videos?|shorts?|youtube|tiktok|instagram|linkedin)\b|\b(one|1|a)\s+week\b[\s\S]{0,80}\b(posts?|videos?|content|youtube|shorts?)\b/i;
+const SCHEDULE_REQUEST_PATTERN = /\b(schedule|queue|slot)\b[\s\S]{0,40}\b(post|content|draft|caption|script|scene|reel|video|image|this|it|scheduler|calendar|later)\b/i;
 const ADMIN_ASSISTANT_MESSAGE_PATTERN = /^(command mode:|locked niche set to:|idea queued in memory:|target platforms updated:|background automation|automation:|engagement sync complete|done\.\s+i scheduled it in your built-in scheduler|process update:|quick update:)/i;
 const SAVE_PREVIOUS_BRAND_IDENTITY_PATTERN = /\b(save|lock|remember|store)\b[\s\S]{0,50}\b(it|this|that|above|previous|last)\b[\s\S]{0,50}\bbrand identity\b|\bbrand identity\b[\s\S]{0,50}\b(save|lock|remember|store)\b/i;
 const INLINE_GENERATION_APPROVAL_PATTERN = /\b(go ahead|proceed|do it|do that|start now|generate now|create now|make it now|yes,?\s*(generate|create|make|proceed)|confirmed)\b/i;
@@ -242,6 +245,19 @@ function isProviderFailureMessage(content: string): boolean {
   return /\b(couldn'?t complete the provider call|generation request failed|retry the request or switch providers|no final content was produced)\b/i.test(content);
 }
 
+function isCapabilityOnlyMessage(content: string): boolean {
+  return /\b(there'?s more\.?\s+i can also|what i can do|i can generate hooks|map trends|craft personalized outreach|provide platform)\b/i.test(content);
+}
+
+function isUnschedulableAssistantContent(content: string): boolean {
+  return (
+    ADMIN_ASSISTANT_MESSAGE_PATTERN.test(content) ||
+    isProviderFailureMessage(content) ||
+    isCapabilityOnlyMessage(content) ||
+    /^I can\s+(generate|create|schedule|plan|help|also)\b/i.test(content)
+  );
+}
+
 function getLatestBrandIdentityCandidate(messages: ChatMessage[]): string | null {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -294,6 +310,72 @@ function buildGenerationConfirmationReply(intent: AgentIntent, request: string):
   ].join('\n');
 }
 
+function isContentPlanRequest(message: string): boolean {
+  return CONTENT_PLAN_REQUEST_PATTERN.test(message.trim().toLowerCase());
+}
+
+function getContentPlanMissingDetails(message: string): string[] {
+  const missing: string[] = [];
+  const lower = message.toLowerCase();
+  const hasTopic =
+    /\b(?:about|around|topic:|niche:|for my|for a|for an)\b[\s\S]{3,}/i.test(message) &&
+    !/^\s*(?:plan|map|outline|calendar)\b[\s\S]{0,80}\b(?:for\s+)?(?:youtube|tiktok|instagram|linkedin|twitter|facebook|threads|pinterest)\s*$/i.test(message);
+  const hasFormat = /\b(shorts?|short[- ]form|long[- ]form|long videos?|community posts?|videos?|both)\b/i.test(lower);
+
+  if (!hasTopic) missing.push('niche or topic');
+  if (/\byoutube\b/i.test(lower) && !hasFormat) missing.push('YouTube format: Shorts, long-form videos, community posts, or both');
+
+  return missing;
+}
+
+function buildContentPlanClarificationReply(message: string): string {
+  const platform = /\byoutube\b/i.test(message)
+    ? 'YouTube'
+    : /\btiktok\b/i.test(message)
+    ? 'TikTok'
+    : /\binstagram\b/i.test(message)
+    ? 'Instagram'
+    : 'the platform';
+
+  return [
+    `I can plan the week for ${platform}, but I need the content direction first so I do not guess.`,
+    'Send the niche or topic, and tell me whether this is Shorts, long-form videos, or both.',
+    'After that I will draft the one-week plan and ask before turning it into scheduled posts.',
+  ].join('\n');
+}
+
+function buildContentPlanConfirmationReply(message: string): string {
+  const platform = /\byoutube\b/i.test(message)
+    ? 'YouTube'
+    : /\btiktok\b/i.test(message)
+    ? 'TikTok'
+    : /\binstagram\b/i.test(message)
+    ? 'Instagram'
+    : 'the platform';
+
+  return [
+    `I can draft the one-week plan for ${platform}.`,
+    `Before I call a provider, confirm this direction: ${message.trim().slice(0, 240)}`,
+    'I will only create the plan. I will not schedule or publish anything until you approve the final posts.',
+    'Reply "yes" or send corrections.',
+  ].join('\n');
+}
+
+function buildOneWeekContentPlanPrompt(message: string): string {
+  return [
+    'Create a one-week content plan from this request.',
+    `Request: ${message.trim()}`,
+    '',
+    'Rules:',
+    '- Do not schedule or claim anything has been posted.',
+    '- Keep the writing natural, specific, and useful; avoid generic capability text.',
+    '- If the request is for YouTube, separate Shorts, long-form, or community posts based on the user request.',
+    '- Produce exactly 7 daily entries.',
+    '- Each entry needs: day, working title, hook, content angle, format, key beats, asset needs, and CTA.',
+    '- End with one short approval question before scheduling.',
+  ].join('\n');
+}
+
 function buildRewriteSourceFromHistory(messages: ChatMessage[]): string | null {
   const assistantCandidates = [...messages]
     .reverse()
@@ -334,7 +416,7 @@ function getLatestSchedulableContent(messages: ChatMessage[]): { text: string; m
     const message = messages[index];
     if (message.role !== 'assistant') continue;
     const content = message.content.trim();
-    if (!content || ADMIN_ASSISTANT_MESSAGE_PATTERN.test(content)) continue;
+    if (!content || isUnschedulableAssistantContent(content)) continue;
 
     const normalized = extractPrimaryBodyForScheduling(content);
     if (normalized.length < 24) continue;
@@ -762,9 +844,9 @@ function buildCapabilitiesReply(options: {
     `- Current engines: chat model ${options.currentModel}, image ${options.imageProvider}, video ${options.videoProvider}.`,
     '- Analyze attached PDFs/files page by page and extract grounded content ideas.',
     '- Save brand memory (niche, audience, character lock, style rules) and reuse it automatically.',
-    '- Schedule content into the built-in scheduler and queue it for posting workers.',
-    '- Run bulk scheduling from CSV or batch inputs via /bulk-schedule and queue jobs for execution.',
-    '- Run background automation loops and sync engagement metrics.',
+    '- Schedule content through Ayrshare when publishing credentials and connected platforms are ready; otherwise I will say it is local-only.',
+    '- Run bulk scheduling from CSV or batch inputs via /bulk-schedule and report provider-accepted vs failed rows.',
+    '- Run in-app automation loops and sync engagement metrics while the app is open.',
     '- For media jobs, I will tell you which agent I am calling first and then return the finished asset or the exact provider failure.',
     `- System status: automation ${options.automationEnabled ? 'running' : 'paused'}, multi-agent ${options.multiAgentEnabled ? 'enabled' : 'disabled'}.`,
     '',
@@ -1267,6 +1349,10 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       }
 
       return { type: 'schedule_post', confidence: 0.95, params: {} };
+    }
+
+    if (isContentPlanRequest(trimmedMessage)) {
+      return { type: 'answer_question', confidence: 0.93, params: { contentPlanRequest: true } };
     }
 
     if (looksLikeCharacterDescriptor(trimmedMessage)) {
@@ -2278,18 +2364,18 @@ Rules:
         if (wantsBulkScheduleExecution(normalizedContent)) {
           await postCommandResponse(
             [
-              'Bulk scheduling is wired.',
+              'Bulk scheduling is ready through the provider-backed CSV flow.',
               'To execute now, either:',
               '1. Open /bulk-schedule and upload your CSV template.',
-              '2. Paste your batch posts here, and I will queue them into the built-in scheduler.',
-              'CSV columns: text,image_url,platforms,schedule_date,hashtags',
+              '2. Paste your batch posts here, and I will ask you to confirm before sending them to Ayrshare.',
+              'CSV columns: text,image_url,platforms,schedule_date,time,hashtags',
             ].join('\n')
           );
         } else {
           await postCommandResponse(
             [
               'Yes. Bulk scheduling is supported here.',
-              'I can run it through the built-in /bulk-schedule flow or from chat with a batch payload.',
+              'Use /bulk-schedule for the safest provider-backed CSV flow. I will report which rows Ayrshare accepts and which rows fail.',
               'When you are ready, say: "Run bulk schedule now" and provide your CSV/posts.',
             ].join('\n')
           );
@@ -2387,6 +2473,38 @@ Rules:
       setState(s => ({ ...s, currentTask: `${intent.type.replace('_', ' ')}...` }));
 
       const confirmedPreviousRequest = Boolean(shouldReplayPrevious && continuationSource);
+
+      if (attachedFiles.length === 0 && intent.type === 'answer_question' && intent.params.contentPlanRequest) {
+        const missingPlanDetails = getContentPlanMissingDetails(normalizedContent);
+        if (missingPlanDetails.length > 0) {
+          await postCommandResponse(buildContentPlanClarificationReply(normalizedContent));
+          return;
+        }
+
+        if (!confirmedPreviousRequest && !hasInlineGenerationApproval(incomingContent)) {
+          await postCommandResponse(buildContentPlanConfirmationReply(normalizedContent));
+          return;
+        }
+
+        setState(s => ({ ...s, currentTask: 'Drafting content plan...' }));
+        const planBrandKit = await loadBrandKit();
+        const planModel = await resolveExecutionModel('creative');
+        try {
+          const plan = await universalChat(buildOneWeekContentPlanPrompt(normalizedContent), {
+            model: planModel,
+            brandKit: planBrandKit,
+          });
+          await postCommandResponse(
+            `${plan.trim()}\n\nI have not scheduled anything yet. Tell me what to change, or say "approve the plan" and give the exact dates/times you want.`
+          );
+        } catch (error) {
+          await postCommandResponse(
+            `I could not draft the one-week plan because the provider call failed: ${error instanceof Error ? error.message : 'unknown error'}. No posts were scheduled.`
+          );
+        }
+        return;
+      }
+
       if (
         attachedFiles.length === 0 &&
         requiresGenerationConfirmation(intent) &&
@@ -2722,7 +2840,7 @@ Rules:
             includeVideo: true,
             includeVoice: true,
             includeMusic: true,
-            enqueueForPosting: /\b(queue|schedule|post later|autopilot)\b/i.test(normalizedContent),
+            enqueueForPosting: false,
             generationId: tracked.record.id,
             onProgress: postProcessUpdate,
           });
@@ -3133,22 +3251,34 @@ Rules:
         });
         await draftsService.updateStatus(draft.id, 'scheduled', scheduledAt);
 
+        const mediaBlockReason = getPublisherMediaBlockReason(lastContent.mediaUrl);
+        let providerSchedule: Awaited<ReturnType<typeof schedulePost>>;
+        if (mediaBlockReason) {
+          providerSchedule = { success: false, error: mediaBlockReason };
+        } else {
+          providerSchedule = await schedulePost({
+            text: lastContent.text,
+            platforms,
+            scheduledDate: scheduledAt,
+            mediaUrl: lastContent.mediaUrl,
+            source: 'agent',
+            generationId: tracked.record.id,
+          });
+        }
+        const providerAccepted = Boolean(providerSchedule.success);
+
         const scheduleEntry: ScheduledPost = {
           id: generateId(),
           draftId: draft.id,
           platforms,
           scheduledAt,
-          status: 'pending',
+          status: providerAccepted ? 'pending' : 'failed',
+          provider: providerAccepted ? 'ayrshare' : 'local',
+          providerPostId: providerSchedule.postId,
+          localOnly: !providerAccepted,
+          error: providerAccepted ? undefined : providerSchedule.error || 'Ayrshare did not accept the scheduled post.',
         };
         await addToSchedule(scheduleEntry);
-
-        const queueJob = await enqueuePostJob({
-          text: lastContent.text,
-          platforms,
-          mediaUrl: lastContent.mediaUrl,
-          scheduledAt,
-          generationId: tracked.record.id,
-        });
 
         await updateGenerationMetadata(tracked.record.id, {
           pipelineMode: 'standard',
@@ -3159,13 +3289,23 @@ Rules:
             music: false,
           },
         });
-        await trackGenerationSuccess(tracked.record.id, {
-          artifactId: draft.id,
-          artifactType: 'draft',
-        });
+        if (providerAccepted) {
+          await trackGenerationSuccess(tracked.record.id, {
+            artifactId: draft.id,
+            artifactType: 'draft',
+          });
+        } else {
+          await trackGenerationFailure(
+            tracked.record.id,
+            providerSchedule.error || 'Ayrshare did not accept the scheduled post.'
+          );
+          await draftsService.updateStatus(draft.id, 'failed', scheduledAt);
+        }
 
         const scheduledResponse = await enforceGovernorApproval(
-          `Done. I scheduled it in your built-in scheduler for ${new Date(scheduledAt).toLocaleString()} on ${platforms.join(', ')}. Draft ID: ${draft.id}. Queue job: ${queueJob.id}.`,
+          providerAccepted
+            ? `Done. Ayrshare accepted the scheduled post for ${new Date(scheduledAt).toLocaleString()} on ${platforms.join(', ')}. Draft ID: ${draft.id}. Provider schedule ID: ${providerSchedule.postId || 'not returned'}.`
+            : `I saved the draft, but it is not scheduled with the publishing provider yet. Ayrshare rejected it: ${providerSchedule.error || 'unknown error'}. Fix that and ask me to schedule it again. Draft ID: ${draft.id}.`,
           { request: normalizedContent, brandKit, platform: platforms[0] }
         );
 
@@ -3218,7 +3358,7 @@ Rules:
             includeVideo: assetPlan.includeVideo,
             includeVoice: assetPlan.includeVoice,
             includeMusic: assetPlan.includeMusic,
-            enqueueForPosting: /\b(queue|schedule|post later|autopilot)\b/i.test(normalizedContent),
+            enqueueForPosting: false,
             generationId: tracked.record.id,
           });
 

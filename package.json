@@ -5,11 +5,11 @@
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "dev": "sh ./scripts/run-next.sh dev --webpack",
-    "build": "sh ./scripts/run-next.sh build --webpack",
-    "start": "sh ./scripts/run-next.sh start",
+    "dev": "if [ \"$TERMUX_VERSION\" ]; then sh ./scripts/run-next.sh dev --webpack; else next dev; fi",
+    "build": "if [ \"$TERMUX_VERSION\" ]; then sh ./scripts/run-next.sh build --webpack; else next build; fi",
+    "start": "if [ \"$TERMUX_VERSION\" ]; then sh ./scripts/run-next.sh start; else next start; fi",
     "lint": "eslint app components hooks lib types *.mjs",
-    "test": "pnpm run test:agent && pnpm run test:agent-progress && pnpm run test:behavior-upgrade && pnpm run test:retry && pnpm run test:puter-service && pnpm run test:chat-storage && pnpm run test:orchestration && pnpm run test:ai-routing && pnpm run test:media-assets && pnpm run test:video-generation && pnpm run test:brand-identity && pnpm run test:provider-credentials && pnpm run test:upload-worker",
+    "test": "pnpm run test:agent && pnpm run test:agent-progress && pnpm run test:behavior-upgrade && pnpm run test:retry && pnpm run test:puter-service && pnpm run test:chat-storage && pnpm run test:orchestration && pnpm run test:ai-routing && pnpm run test:media-assets && pnpm run test:video-generation && pnpm run test:brand-identity && pnpm run test:provider-credentials && pnpm run test:upload-worker && pnpm run test:publishing-readiness && pnpm run test:server-ai-proxy",
     "test:agent": "node --eval \"import('./tests/agent-behavior.test.mjs')\"",
     "test:agent-progress": "node --eval \"import('./tests/agent-progress.test.mjs')\"",
     "test:behavior-upgrade": "node --eval \"import('./tests/behavior-upgrade.test.mjs')\"",
@@ -22,7 +22,9 @@
     "test:video-generation": "node --eval \"import('./tests/video-generation.test.mjs')\"",
     "test:brand-identity": "node --eval \"import('./tests/brand-identity-parser.test.mjs')\"",
     "test:provider-credentials": "node --eval \"import('./tests/provider-credentials.test.mjs')\"",
-    "test:upload-worker": "node --eval \"import('./tests/upload-worker.test.mjs')\""
+    "test:upload-worker": "node --eval \"import('./tests/upload-worker.test.mjs')\"",
+    "test:publishing-readiness": "node --eval \"import('./tests/publishing-readiness.test.mjs')\"",
+    "test:server-ai-proxy": "node --eval \"import('./tests/server-ai-provider-proxy.test.mjs')\""
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
@@ -58,8 +60,6 @@
     "@supabase/ssr": "^0.7.0",
     "@supabase/supabase-js": "^2.57.4",
     "@vercel/analytics": "1.6.1",
-    "autoprefixer": "^10.4.20",
-    "axios": "^1.6.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "1.1.1",

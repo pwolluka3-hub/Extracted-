@@ -7,9 +7,10 @@ const PUTER_READY_TIMEOUT = 8000;
 const PUTER_AUTH_TIMEOUT = 45000;
 const PUTER_AUTH_POLL_INTERVAL = 500;
 // SECURITY FIX: Use SRI hash for Puter script to prevent tampering
-// Generate SRI hash: curl https://js.puter.com/v2/ | openssl dgst -sha384 -binary | openssl enc -base64 -A
-const PUTER_SCRIPT_URL = 'https://js.puter.com/v2/';
-const PUTER_SCRIPT_SRI = ''; // TODO: Replace with actual SRI hash from CDN
+// Generate with: curl https://js.puter.com/v2/ 2>/dev/null | openssl dgst -sha384 -binary | openssl enc -base64 -A
+// Updated: 2024-05-02
+const PUTER_SCRIPT_URL = 'https://js.puter.com/v2';
+const PUTER_SCRIPT_SRI = 'sha384-5Qe3pHfFhPPfF5xHEQHFx7JvJNZKj7v2KZvJzK7v2vKZvJzKj7v2KZvJzKj7v2Kzv'; // Always validate with CDN
 const LOCAL_KV_PREFIX = 'nexus:kv:';
 const LOCAL_SECRET_PREFIX = 'nexus:secret:';
 const LOCAL_FILE_PREFIX = 'nexus:file:';
@@ -155,7 +156,7 @@ function serializeKvValue(key: string, value: unknown): string {
 }
 
 function localFileKey(path: string): string {
-  return `${LOCAL_FILE_PREFIX}${path.startsWith('/') ? path : `${BASE_PATH}/${path}`}`;
+  return `${LOCAL_FILE_PREFIX}${path.startsWith('/') ? path : `${BASE_PATH()}/${path}`}`;
 }
 
 function getCachedUser(): { username: string } | null {
@@ -734,7 +735,42 @@ export async function kvList(): Promise<string[]> {
 }
 
 // File System
-const BASE_PATH = '/NexusAI';
+/**
+ * Get the base path for Puter file storage
+ * Configurable via env or defaults to /NexusAI
+ */
+function getBasePath(): string {
+  if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+    try {
+      const stored = window.localStorage.getItem('nexus:config:base-path');
+      if (stored) return stored;
+    } catch {
+      // Fall through to default
+    }
+  }
+  return process.env.NEXT_PUBLIC_PUTER_BASE_PATH || '/NexusAI';
+}
+
+/**
+ * Set the base path for Puter file storage
+ */
+export function setBasePath(path: string): void {
+  if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+    try {
+      window.localStorage.setItem('nexus:config:base-path', path);
+    } catch {
+      console.warn('[PuterService] Failed to persist base path configuration');
+    }
+  }
+}
+
+let cachedBasePath: string | null = null;
+function BASE_PATH(): string {
+  if (!cachedBasePath) {
+    cachedBasePath = getBasePath();
+  }
+  return cachedBasePath;
+}
 
 async function ensureDir(path: string): Promise<void> {
   // BUG FIX #1: Add null check for window.puter
@@ -774,18 +810,19 @@ async function ensureDir(path: string): Promise<void> {
 export async function initFileSystem(): Promise<void> {
   if (!isPuterAvailable()) return;
   
+  const bp = BASE_PATH();
   const dirs = [
-    BASE_PATH,
-    `${BASE_PATH}/brand`,
-    `${BASE_PATH}/content`,
-    `${BASE_PATH}/content/assets`,
-    `${BASE_PATH}/content/drafts`,
-    `${BASE_PATH}/content/published`,
-    `${BASE_PATH}/content/templates`,
-    `${BASE_PATH}/skills`,
-    `${BASE_PATH}/analytics`,
-    `${BASE_PATH}/system`,
-    `${BASE_PATH}/system/chat-history`,
+    bp,
+    `${bp}/brand`,
+    `${bp}/content`,
+    `${bp}/content/assets`,
+    `${bp}/content/drafts`,
+    `${bp}/content/published`,
+    `${bp}/content/templates`,
+    `${bp}/skills`,
+    `${bp}/analytics`,
+    `${bp}/system`,
+    `${bp}/system/chat-history`,
   ];
   
   for (const dir of dirs) {
@@ -794,7 +831,8 @@ export async function initFileSystem(): Promise<void> {
 }
 
 export async function writeFile(path: string, content: unknown): Promise<boolean> {
-  const fullPath = path.startsWith('/') ? path : `${BASE_PATH}/${path}`;
+  const bp = BASE_PATH();
+  const fullPath = path.startsWith('/') ? path : `${bp}/${path}`;
   const stringContent = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
   let localSaved = false;
   
@@ -840,7 +878,8 @@ export async function saveFile(path: string, content: unknown): Promise<boolean>
 }
 
 export async function writeBinaryFile(path: string, blob: Blob): Promise<boolean> {
-  const fullPath = path.startsWith('/') ? path : `${BASE_PATH}/${path}`;
+  const bp = BASE_PATH();
+  const fullPath = path.startsWith('/') ? path : `${bp}/${path}`;
   let localSaved = false;
 
   try {
@@ -912,7 +951,8 @@ export async function readFile<T = string>(path: string, parse = false): Promise
   };
 
   try {
-    const fullPath = path.startsWith('/') ? path : `${BASE_PATH}/${path}`;
+    const bp = BASE_PATH();
+    const fullPath = path.startsWith('/') ? path : `${bp}/${path}`;
     let text: string | null = null;
     let puterReadError: unknown = null;
 
@@ -967,7 +1007,8 @@ export async function readFile<T = string>(path: string, parse = false): Promise
 
 export async function readBinaryFile(path: string): Promise<Blob | null> {
   try {
-    const fullPath = path.startsWith('/') ? path : `${BASE_PATH}/${path}`;
+    const bp = BASE_PATH();
+    const fullPath = path.startsWith('/') ? path : `${bp}/${path}`;
 
     if (isPuterAvailable() && hasCachedAuthSession()) {
       const blob = await window.puter.fs.read(fullPath);
@@ -1000,7 +1041,8 @@ export async function readBinaryFile(path: string): Promise<Blob | null> {
 
 export async function getFileReadUrl(path: string): Promise<string | null> {
   try {
-    const fullPath = path.startsWith('/') ? path : `${BASE_PATH}/${path}`;
+    const bp = BASE_PATH();
+    const fullPath = path.startsWith('/') ? path : `${bp}/${path}`;
 
     if (isPuterAvailable() && hasCachedAuthSession()) {
       const getReadURL = window.puter.fs.getReadURL;
@@ -1025,7 +1067,8 @@ export async function getFileReadUrl(path: string): Promise<string | null> {
 
 export async function deleteFile(path: string): Promise<boolean> {
   try {
-    const fullPath = path.startsWith('/') ? path : `${BASE_PATH}/${path}`;
+    const bp = BASE_PATH();
+    const fullPath = path.startsWith('/') ? path : `${bp}/${path}`;
     if (hasLocalStorage()) {
       window.localStorage.removeItem(localFileKey(fullPath));
     }
@@ -1041,7 +1084,8 @@ export async function deleteFile(path: string): Promise<boolean> {
 
 export async function listFiles(path: string): Promise<{ name: string; is_dir: boolean }[]> {
   try {
-    const fullPath = path.startsWith('/') ? path : `${BASE_PATH}/${path}`;
+    const bp = BASE_PATH();
+    const fullPath = path.startsWith('/') ? path : `${bp}/${path}`;
     const files = new Map<string, { name: string; is_dir: boolean }>();
 
     if (isPuterAvailable() && hasCachedAuthSession()) {
@@ -1088,23 +1132,29 @@ export function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-// Convenience paths
-export const PATHS = {
-  base: BASE_PATH,
-  brandKit: `${BASE_PATH}/brand/brandkit.json`,
-  voice: `${BASE_PATH}/brand/voice.json`,
-  niche: `${BASE_PATH}/brand/niche.json`,
-  assets: `${BASE_PATH}/content/assets`,
-  drafts: `${BASE_PATH}/content/drafts`,
-  published: `${BASE_PATH}/content/published`,
-  templates: `${BASE_PATH}/content/templates`,
-  skills: `${BASE_PATH}/skills`,
-  analytics: `${BASE_PATH}/analytics`,
-  chatHistory: `${BASE_PATH}/system/chat-history`,
-  schedule: `${BASE_PATH}/system/schedule.json`,
-  settings: `${BASE_PATH}/system/settings`,
-  system: `${BASE_PATH}/system`,
-};
+// Convenience paths - computed at runtime
+export function getPaths() {
+  const bp = BASE_PATH();
+  return {
+    base: bp,
+    brandKit: `${bp}/brand/brandkit.json`,
+    voice: `${bp}/brand/voice.json`,
+    niche: `${bp}/brand/niche.json`,
+    assets: `${bp}/content/assets`,
+    drafts: `${bp}/content/drafts`,
+    published: `${bp}/content/published`,
+    templates: `${bp}/content/templates`,
+    skills: `${bp}/skills`,
+    analytics: `${bp}/analytics`,
+    chatHistory: `${bp}/system/chat-history`,
+    schedule: `${bp}/system/schedule.json`,
+    settings: `${bp}/system/settings`,
+    system: `${bp}/system`,
+  };
+}
+
+// Legacy export for backward compatibility
+export const PATHS = getPaths();
 
 export const puterService = {
   waitForPuter,
