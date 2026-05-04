@@ -1,15 +1,7 @@
-// Orchestrator Service Entrypoint
-// This wraps the orchestration engine into a standalone Vercel Service.
-
-import { orchestrate, type OrchestrationOptions } from './orchestrationEngine';
 import { NextResponse } from 'next/server';
-import type { NextRequest } from 'next/server';
+import { orchestrate } from '@/lib/services/orchestrationEngine';
 
-export default async function handler(request: NextRequest) {
-  if (request.method !== 'POST') {
-    return NextResponse.json({ error: 'Method not allowed' }, { status: 405 });
-  }
-
+export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { userRequest, options } = body;

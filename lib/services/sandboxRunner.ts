@@ -1,9 +1,9 @@
-// Sandbox Runner
-// Executes AI-generated code in a separate worker thread with a restricted VM context.
+// Sandbox Runner - Serverless Optimized
+// Executes AI-generated code using the vm module.
+// Note: worker_threads are removed for Lambda compatibility.
 
-import { Worker, isMainThread, parentPort, workerData } from 'worker_threads';
 import vm from 'vm';
-import { createManagerContext, type ManagerContext } from './managerContext';
+import { createManagerContext } from './managerContext';
 
 export interface SandboxResult<T = any> {
   success: boolean;
@@ -18,114 +18,48 @@ export async function runSandboxedCode<T = any>(
   timeoutMs: number = 500
 ): Promise<SandboxResult<T>> {
   const startTime = Date.now();
+  const context = createManagerContext();
 
-  return new Promise((resolve) => {
-    const worker = new Worker(`
-      const { parentPort, workerData } = require('worker_threads');
-      const vm = require('vm');
-
-      async function execute() {
-        try {
-          const { code, input, context } = workerData;
-          
-          // Create a restricted sandbox context
-          const sandbox = {
-            ...context,
-            console: {
-              log: (...args) => parentPort.postMessage({ type: 'log', content: args.join(' ') }),
-              error: (...args) => parentPort.postMessage({ type: 'error', content: args.join(' ') }),
-            },
-            // Prevent access to global Node.js objects
-            process: undefined,
-            require: undefined,
-            module: undefined,
-            __dirname: undefined,
-            __filename: undefined,
-          };
-
-          vm.createContext(sandbox);
-          
-          // Wrap code in an async function to allow await
-          const wrappedCode = \`async function __sandbox_main(input, context) { \${code} }\`;
-          const script = new vm.Script(wrappedCode);
-          const mainFn = script.runInContext(sandbox);
-
-          const result = await mainFn(input, sandbox.context);
-          parentPort.postMessage({ type: 'result', content: result });
-        } catch (err) {
-          parentPort.postMessage({ type: 'error', content: err.message });
-        }
-      }
-
-      execute();
-    `, {
-      eval: true,
-      workerData: {
-        code,
-        input,
-        context: {
-          kv: {
-            get: (k) => parentPort.postMessage({ type: 'kv_get', key: k }),
-            set: (k, v) => parentPort.postMessage({ type: 'kv_set', key: k, value: v }),
-          },
-        },
+  try {
+    // Create a restricted sandbox context
+    const sandbox = {
+      ...context,
+      console: {
+        log: (...args: any[]) => console.log("[Sandbox Log]:", ...args),
+        error: (...args: any[]) => console.error("[Sandbox Error]:", ...args),
       },
-    });
+      process: undefined,
+      require: undefined,
+      module: undefined,
+      __dirname: undefined,
+      __filename: undefined,
+    };
 
-    const timeout = setTimeout(() => {
-      worker.terminate();
-      resolve({
-        success: false,
-        error: 'Execution timed out',
-        duration: Date.now() - startTime,
-      });
-    }, timeoutMs);
+    vm.createContext(sandbox);
+    
+    // Wrap code in an async function to allow await
+    const wrappedCode = `async function __sandbox_main(input, context) { ${code} }`;
+    const script = new vm.Script(wrappedCode);
+    const mainFn = script.runInContext(sandbox);
 
-    worker.on('message', async (msg) => {
-      if (msg.type === 'result') {
-        clearTimeout(timeout);
-        worker.terminate();
-        resolve({
-          success: true,
-          result: msg.content,
-          duration: Date.now() - startTime,
-        });
-      } else if (msg.type === 'error') {
-        clearTimeout(timeout);
-        worker.terminate();
-        resolve({
-          success: false,
-          error: msg.content,
-          duration: Date.now() - startTime,
-        });
-      } else if (msg.type === 'log') {
-        console.log("[Sandbox Log]: " + msg.content);
-      } else if (msg.type === 'kv_get') {
-        const val = await createManagerContext().kv.get(msg.key);
-        worker.postMessage({ type: 'kv_get_res', value: val });
-      } else if (msg.type === 'kv_set') {
-        await createManagerContext().kv.set(msg.key, msg.value);
-      }
-    });
+    // Execute with a timeout
+    const result = await Promise.race([
+      mainFn(input, sandbox.context),
+      new Promise<never>((_, reject) => 
+        setTimeout(() => reject(new Error('Execution timed out')), timeoutMs)
+      )
+    ]);
 
-    worker.on('error', (err) => {
-      clearTimeout(timeout);
-      resolve({
-        success: false,
-        error: err.message,
-        duration: Date.now() - startTime,
-      });
-    });
-
-    worker.on('exit', (code) => {
-      if (code !== 0) {
-        clearTimeout(timeout);
-        resolve({
-          success: false,
-          error: "Worker exited with non-zero code",
-          duration: Date.now() - startTime,
-        });
-      }
-    });
-  });
+    return {
+      success: true,
+      result,
+      duration: Date.now() - startTime,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err.message || 'Unknown execution error',
+      duration: Date.now() - startTime,
+    };
+  }
 }

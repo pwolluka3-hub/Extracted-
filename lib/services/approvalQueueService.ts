@@ -1,78 +1,49 @@
-// Approval Queue Service
-// Manages content that is ready for CEO review before final publication.
-
-import { kvGet, kvSet } from './puterService';
-import { generateId } from './memoryService';
-
-export interface ApprovalItem {
-  id: string;
-  content: string;
-  metadata: {
-    platform: string;
-    agentRole: string;
-    modelUsed: string;
-    score: number;
-    createdAt: string;
-    orchestrationPlanId: string;
-  };
-  status: 'pending' | 'approved' | 'rejected';
-  ceoFeedback?: string;
-  approvedAt?: string;
-}
-
-const APPROVAL_QUEUE_KEY = 'nexus_approval_queue';
+import { createClient } from '@/lib/supabase/server';
+import { type ApprovalItem } from '@/lib/types';
 
 export async function addToApprovalQueue(
-  content: string, 
-  metadata: ApprovalItem['metadata']
+  content: string,
+  metadata: Partial<ApprovalItem>
 ): Promise<string> {
-  const id = generateId();
-  const item: ApprovalItem = {
-    id,
-    content,
-    metadata,
-    status: 'pending',
-  };
+  const supabase = await createClient();
+  
+  const { data, error } = await supabase
+    .from('approval_queue')
+    .insert({
+      content,
+      metadata: metadata as any,
+    })
+    .select()
+    .single();
 
-  const queue = await getApprovalQueue();
-  queue.push(item);
-  await saveApprovalQueue(queue);
-  
-  return id;
-}
-
-export async function getApprovalQueue(): Promise<ApprovalItem[]> {
-  try {
-    const data = await kvGet(APPROVAL_QUEUE_KEY);
-    return data ? JSON.parse(data) : [];
-  } catch {
-    return [];
-  }
-}
-
-export async function updateApprovalStatus(
-  id: string, 
-  status: 'approved' | 'rejected', 
-  feedback?: string
-): Promise<boolean> {
-  const queue = await getApprovalQueue();
-  const index = queue.findIndex(item => item.id === id);
-  
-  if (index === -1) return false;
-  
-  queue[index].status = status;
-  queue[index].ceoFeedback = feedback;
-  queue[index].approvedAt = status === 'approved' ? new Date().toISOString() : undefined;
-  
-  await saveApprovalQueue(queue);
-  return true;
+  if (error) throw error;
+  return data.id;
 }
 
 export async function getPendingApprovals(): Promise<ApprovalItem[]> {
-  const queue = await getApprovalQueue();
-  return queue.filter(item => item.status === 'pending');
+  const supabase = await createClient();
+  
+  const { data, error } = await supabase
+    .from('approval_queue')
+    .select('*')
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+  return data as ApprovalItem[];
 }
 
-async function saveApprovalQueue(queue: ApprovalItem[]): Promise<void> {
-  await kvSet(APPROVAL_QUEUE_KEY, JSON.stringify(queue));
+export async function resolveApproval(
+  id: string,
+  status: 'approved' | 'rejected',
+  reason?: string
+): Promise<void> {
+  const supabase = await createClient();
+  
+  const { error } = await supabase
+    .from('approval_queue')
+    .update({ status, decision_reason: reason })
+    .eq('id', id);
+
+  if (error) throw error;
 }

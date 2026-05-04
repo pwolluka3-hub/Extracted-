@@ -1,15 +1,7 @@
-// Worker Service Entrypoint
-// This wraps the Sandbox Runner into a standalone Vercel Service for heavy computation.
-
-import { runSandboxedCode } from './sandboxRunner';
 import { NextResponse } from 'next/server';
-import type { NextRequest } from 'next/server';
+import { runSandboxedCode } from '@/lib/services/sandboxRunner';
 
-export default async function handler(request: NextRequest) {
-  if (request.method !== 'POST') {
-    return NextResponse.json({ error: 'Method not allowed' }, { status: 405 });
-  }
-
+export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { code, input, timeoutMs } = body;

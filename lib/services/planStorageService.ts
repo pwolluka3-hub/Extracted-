@@ -1,52 +1,30 @@
-// Plan Storage Service
-// Persists orchestration plans and their results for CEO oversight.
+import { createClient } from '@/lib/supabase/server';
 
-import { kvGet, kvSet } from './puterService';
-import { generateId } from './memoryService';
-import type { OrchestrationPlan, AgentOutput } from './multiAgentService';
-
-export interface PersistedPlan extends OrchestrationPlan {
-  results: AgentOutput[];
-  finalCombinedOutput?: string;
-  startTime: string;
-  endTime?: string;
-  status: OrchestrationPlan['status'];
-}
-
-const PLANS_STORAGE_KEY = 'nexus_orchestration_plans';
-
-export async function savePlan(plan: OrchestrationPlan, outputs: AgentOutput[], combined?: string, startTime?: string): Promise<void> {
-  const plans = await getAllPlans();
+export async function savePlan(plan: any) {
+  const supabase = await createClient();
   
-  const updatedPlan: PersistedPlan = {
-    ...plan,
-    results: outputs,
-    finalCombinedOutput: combined,
-    startTime: startTime || new Date().toISOString(),
-    endTime: new Date().toISOString(),
-  };
+  const { error } = await supabase
+    .from('orchestration_plans')
+    .upsert({
+      id: plan.id,
+      user_request: plan.userRequest,
+      plan_data: plan,
+      status: plan.status,
+      final_output: plan.finalOutput,
+    });
 
-  const index = plans.findIndex(p => p.id === plan.id);
-  if (index >= 0) {
-    plans[index] = updatedPlan;
-  } else {
-    plans.unshift(updatedPlan);
-  }
-
-  // Keep last 100 plans
-  await kvSet(PLANS_STORAGE_KEY, JSON.stringify(plans.slice(0, 100)));
+  if (error) throw error;
 }
 
-export async function getAllPlans(): Promise<PersistedPlan[]> {
-  try {
-    const data = await kvGet(PLANS_STORAGE_KEY);
-    return data ? JSON.parse(data) : [];
-  } catch {
-    return [];
-  }
-}
+export async function getPlan(id: string) {
+  const supabase = await createClient();
+  
+  const { data, error } = await supabase
+    .from('orchestration_plans')
+    .select('*')
+    .eq('id', id)
+    .single();
 
-export async function getPlanById(id: string): Promise<PersistedPlan | null> {
-  const plans = await getAllPlans();
-  return plans.find(p => p.id === id) || null;
+  if (error) throw error;
+  return data;
 }
