@@ -7,7 +7,6 @@ import { NeonButton } from '@/components/nexus/NeonButton';
 import { LoadingPulse } from '@/components/nexus/LoadingPulse';
 import { PageHeader } from '@/components/nexus/PageHeader';
 import { toast } from 'sonner';
-import { toast } from 'sonner';
 import { 
   useNexus, 
   useNexusAutomation, 
