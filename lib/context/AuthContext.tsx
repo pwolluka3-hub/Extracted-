@@ -22,6 +22,7 @@ interface AuthContextType extends AuthState {
   loginWithSupabase: (provider: 'google' | 'github' | 'discord') => Promise<void>;
   logout: () => Promise<void>;
   enterGuestMode: () => void;
+  bypassAuth: () => void;
   refreshBrandKit: () => Promise<void>;
   setOnboardingComplete: (complete: boolean) => void;
 }
@@ -310,6 +311,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAuthenticated: false,
       isGuest: true,
       user: null,
+    }));
+  }, []);
+
+  const bypassAuth = useCallback(() => {
+    setState((current) => ({
+      ...current,
+      isLoading: false,
+      isAuthenticated: true,
+      isGuest: false,
+      user: { username: 'dev_user' },
     }));
   }, []);
 

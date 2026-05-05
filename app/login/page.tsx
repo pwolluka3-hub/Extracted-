@@ -7,9 +7,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
-import { Chrome } from 'lucide-react'; // Assuming lucide-react is installed based on package.json
+import { Chrome, Rocket } from 'lucide-react';
+import { useAuth } from '@/lib/context/AuthContext';
 
 export default function LoginPage() {
+  const { bypassAuth } = useAuth();
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
