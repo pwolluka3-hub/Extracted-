@@ -42,7 +42,11 @@ export async function resolveApproval(
   
   const { error } = await supabase
     .from('approval_queue')
-    .update({ status, decision_reason: reason })
+    .update({ 
+      status, 
+      decision_reason: reason,
+      rejection_reason: status === 'rejected' ? reason : null 
+    })
     .eq('id', id);
 
   if (error) throw error;

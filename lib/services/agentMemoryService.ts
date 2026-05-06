@@ -2,6 +2,10 @@
 // This stores learned information, user preferences, niche details, and content ideas
 import { kvGet, kvSet, readFile, writeFile, PATHS } from './puterService';
 import { universalChat } from './aiService';
+import { vectorMemoryService } from './vectorMemoryService';
+import { performanceService } from './performanceService';
+
+
 
 export interface AgentMemory {
   // Core brand/niche knowledge
@@ -440,10 +444,54 @@ export async function addConversationSummary(summary: string, keyPoints: string[
 }
 
 // Build memory context string for injection into prompts
-export async function buildMemoryContext(): Promise<string> {
+export async function buildMemoryContext(agentId: string = 'default'): Promise<string> {
   const memory = await loadAgentMemory();
   
+  // 1. Retrieve relevant vector memories based on the current state
+  // We use the current niche and audience as the query for the vector store
+  const query = `${memory.niche} ${memory.targetAudience}`.trim();
+  let vectorContext = '';
+  
+  if (query) {
+    try {
+      const relevantMemories = await vectorMemoryService.queryMemory(agentId, query);
+      if (relevantMemories.length > 0) {
+        vectorContext = `\n\nRELEVANT HISTORICAL CONTEXT:\n${relevantMemories.map(m => `- ${m.content}`).join('\n')}`;
+      }
+    } catch (e) {
+      console.error('[buildMemoryContext] Vector memory error:', e);
+    }
+  }
+  
+  // 2. Inject Performance Insights (The Feedback Loop)
+  let performanceContext = '';
+  try {
+    const insights = await performanceService.getActiveInsights(agentId);
+    if (insights.length > 0) {
+      performanceContext = `\n\nPROVEN PERFORMANCE INSIGHTS (Do more of this):\n${insights.map(i => `- [${i.category}] ${i.insight}`).join('\n')}`;
+    }
+  } catch (e) {
+    console.error('[buildMemoryContext] Performance context error:', e);
+  }
+
+  // 3. Inject Active Automation Plan (The Strategy)
+  let planContext = '';
+  try {
+    const { planService } = await import('./planService');
+    const activePlan = await planService.getActivePlan(agentId);
+    if (activePlan) {
+      const steps = activePlan.steps.map((s, i) => 
+        `${i + 1}. [${s.status}] ${s.description} ${s.status === 'completed' ? '✅' : ''}`
+      ).join('\n');
+      planContext = `\n\nACTIVE AUTOMATION PLAN: ${activePlan.goal}\n${steps}\nStatus: ${activePlan.status}`;
+    }
+  } catch (e) {
+    console.error('[buildMemoryContext] Plan context error:', e);
+  }
+  
   const sections: string[] = [];
+
+
   const lockedProfile: string[] = [];
   
   // Niche and audience
@@ -533,7 +581,7 @@ export async function buildMemoryContext(): Promise<string> {
     ? `LOCKED OPERATING PROFILE:\n- ${lockedProfile.join('\n- ')}\n- Treat this profile as the default operating context unless the user explicitly changes it.\n- Keep output aligned with this niche, audience, platform mix, monetization direction, and saved ideas.`
     : '';
 
-  return `\n\n=== PERSISTENT MEMORY ===\n${lockedProfileSection ? `${lockedProfileSection}\n\n` : ''}${sections.join('\n\n')}\n=== END MEMORY ===`;
+  return `\n\n=== PERSISTENT MEMORY ===${vectorContext}${performanceContext}\n${lockedProfileSection ? `${lockedProfileSection}\n\n` : ''}${sections.join('\n\n')}\n=== END MEMORY ===`;
 }
 
 // Sync memory with brand kit (one-time or when brand kit updates)

@@ -1,0 +1,88 @@
+/**
+ * ActionRegistry defines the mapping between AI-callable tool names 
+ * and their corresponding n8n workflow IDs.
+ */
+export interface AgentAction {
+  id: string;
+  name: string;
+  description: string;
+  workflowId: string; // The n8n webhook path/ID
+  parameters: Record<string, { type: 'string' | 'number' | 'boolean'; description: string }>;
+  requiresApproval: boolean;
+}
+
+export const ACTION_REGISTRY: Record<string, AgentAction> = {
+  'generate_video': {
+    id: 'gen_vid',
+    name: 'Generate Video',
+    description: 'Generates a short-form video based on a script and brand identity.',
+    workflowId: 'workflow-video-generation',
+    parameters: {
+      script: { type: 'string', description: 'The full script for the video' },
+      aspect_ratio: { type: 'string', description: 'e.g., 9:16 for shorts' },
+      duration: { type: 'number', description: 'Target duration in seconds' },
+    },
+    requiresApproval: false,
+  },
+  'generate_social_copy': {
+    id: 'gen_copy',
+    name: 'Generate Social Copy',
+    description: 'Creates an optimized caption and a set of hashtags for a specific platform.',
+    workflowId: 'workflow-caption-generation',
+    parameters: {
+      video_summary: { type: 'string', description: 'Summary of the video content' },
+      platform: { type: 'string', description: 'tiktok, instagram, or youtube' },
+      target_audience: { type: 'string', description: 'Who the post is targeting' },
+    },
+    requiresApproval: false,
+  },
+  'post_to_social': {
+    id: 'post_soc',
+    name: 'Post to Social Media',
+    description: 'Uploads the video and caption to the specified social platform.',
+    workflowId: 'workflow-social-posting',
+    parameters: {
+      video_url: { type: 'string', description: 'URL of the hosted video file' },
+      caption: { type: 'string', description: 'Final caption including hashtags' },
+      platform: { type: 'string', description: 'tiktok, instagram, or youtube' },
+    },
+    requiresApproval: true, // This triggers the /approvals flow
+  },
+  'schedule_post': {
+    id: 'sched_post',
+    name: 'Schedule Post',
+    description: 'Schedules a post for a future date and time.',
+    workflowId: 'workflow-post-scheduler',
+    parameters: {
+      video_url: { type: 'string', description: 'URL of the hosted video file' },
+      caption: { type: 'string', description: 'Final caption' },
+      platform: { type: 'string', description: 'tiktok, instagram, or youtube' },
+      scheduled_time: { type: 'string', description: 'ISO 8601 timestamp' },
+    },
+    requiresApproval: true,
+  },
+  'create_automation_plan': {
+    id: 'create_plan',
+    name: 'Draft Automation Plan',
+    description: 'Create a structured strategic plan with milestones and atomic steps to achieve a high-level goal.',
+    workflowId: 'internal-plan-creation', // Handled internally by planService
+    parameters: {
+      goal: { type: 'string', description: 'The overall objective (e.g. "Grow to 10k followers")' },
+      description: { type: 'string', description: 'Detailed context and constraints for the plan' },
+      steps: { type: 'string', description: 'JSON string of steps: [{description, action_type, dependencies[]}]' },
+    },
+    requiresApproval: false,
+  },
+  'update_plan_progress': {
+    id: 'update_progress',
+    name: 'Update Plan Progress',
+    description: 'Mark a step in the current automation plan as completed or failed.',
+    workflowId: 'internal-plan-update',
+    parameters: {
+      stepId: { type: 'string', description: 'The ID of the step to update' },
+      status: { type: 'string', description: 'completed or failed' },
+      result: { type: 'string', description: 'Summary of what happened during the step' },
+    },
+    requiresApproval: false,
+  },
+};

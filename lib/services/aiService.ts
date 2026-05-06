@@ -68,7 +68,9 @@ const PROVIDER_KEY_CANDIDATES: Record<Exclude<RoutedProvider, 'puter' | 'ollama'
 };
 
 const providerCooldownUntil = new Map<RoutedProvider, number>();
+const providerFailureCount = new Map<RoutedProvider, number>();
 const PROVIDER_COOLDOWN_MS = 5 * 60 * 1000;
+const FAILURE_THRESHOLD = 3; // Trip circuit after 3 consecutive failures
 const SERVER_PROVIDER_CACHE_MS = 30 * 1000;
 
 type ServerProxyProvider = Exclude<RoutedProvider, 'puter' | 'ollama'>;
@@ -277,8 +279,15 @@ function isProviderInCooldown(provider: RoutedProvider): boolean {
 }
 
 function applyProviderCooldown(provider: RoutedProvider, errorMessage: string): void {
-  if (!isQuotaOrBillingError(errorMessage)) return;
-  providerCooldownUntil.set(provider, Date.now() + PROVIDER_COOLDOWN_MS);
+  const failures = (providerFailureCount.get(provider) || 0) + 1;
+  providerFailureCount.set(provider, failures);
+
+  if (isQuotaOrBillingError(errorMessage) || failures >= FAILURE_THRESHOLD) {
+    console.warn(`[CircuitBreaker] Tripping circuit for ${provider}. Failures: ${failures}. Reason: ${errorMessage}`);
+    providerCooldownUntil.set(provider, Date.now() + PROVIDER_COOLDOWN_MS);
+    // Reset failure count once cooldown is set
+    providerFailureCount.set(provider, 0);
+  }
 }
 
 type PuterChatStreamChunk = { text?: unknown };
